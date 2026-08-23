@@ -1,0 +1,17 @@
+traffic_light_color:
+  ros__parameters:
+    input_image_topic: "/camera/image_raw"
+    detections_topic: "/perception/detections_json"
+    state_topic: "/perception/traffic_light_state"
+    result_topic: "/perception/traffic_light_state_json"
+    debug_image_topic: "/perception/traffic_light_image"
+    candidate_class_names: ["R_light", "Y_light", "G_light", "etc_light"]
+    detection_timeout_sec: 0.3
+    minimum_yolo_confidence: 0.25
+    saturation_min: 90
+    value_min: 100
+    minimum_color_pixels: 20
+    dominance_ratio: 1.35
+    box_padding_ratio: 0.05
+    publish_debug_image: true
+    allow_yolo_class_fallback: true

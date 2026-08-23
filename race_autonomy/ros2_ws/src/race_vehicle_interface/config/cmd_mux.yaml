@@ -1,0 +1,18 @@
+cmd_mux_node:
+  ros__parameters:
+    sources: [camera, gps, lidar]
+    mode_map: "NORMAL:camera,SLOPE:camera,T_PARK:lidar,PARALLEL_PARK:lidar,GPS_TRACK:gps,IDLE:none"
+    mode_topic: /vehicle_mode
+    estop_topic: /estop_lock
+    camera_drive_topic: /camera_drive
+    camera_wheel_topic: /camera_wheel
+    output_drive_topic: /mcu_drive
+    output_wheel_topic: /mcu_wheel
+    publish_hz: 20.0
+    source_timeout_sec: 0.3
+    manual_enable: true
+    manual_timeout_sec: 0.3
+    maximum_abs_stage: 3
+    maximum_steering_deg: 27.0
+    stop_steering_deg: 0.0
+    initial_mode: IDLE

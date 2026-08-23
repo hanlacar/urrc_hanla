@@ -1,0 +1,63 @@
+arduino_serial_bridge_node:
+  ros__parameters:
+    port: /dev/ttyACM0
+    baudrate: 115200
+    encoder_topic: /inpulse
+    rpm_topic: /rpm
+    # Measured over 5.0 m: 5367 counts / 5 m = 1073.4 counts/m.
+    encoder_counts_per_meter: 1073.4
+    speed_mps_topic: /vehicle/speed_mps
+    speed_kph_topic: /vehicle/speed_kph
+    speed_valid_topic: /vehicle/speed_valid
+    distance_m_topic: /vehicle/distance_m
+    steering_topic: /steer_angle
+    # The v14 T frame reports accumulated steering drive time, not degrees.
+    steering_position_topic: /steer_position_ms
+    # 2026-08-17 physical wheel alignment: visually straight, stable A0=261.
+    steering_neutral_a0: 261
+    steering_neutral_tolerance_a0: 5
+    steering_a0_topic: /steer_a0
+    steering_a0_error_topic: /steer_a0_error
+    maximum_steering_position_ms: 440.0
+    feedback_timeout_sec: 0.35
+    reconnect_interval_sec: 1.0
+    publish_raw_status: true
+    dtr: true
+    rts: true
+    reset_on_connect: true
+    reset_pulse_sec: 0.1
+    write_timeout_sec: 0.1
+
+    # Keep false until the first command test is performed with wheels lifted.
+    allow_transmit: false
+    steering_only: false
+    cmd_driving_topic: /mcu_drive
+    cmd_steer_topic: /mcu_wheel
+    command_rate_hz: 20.0
+    command_timeout_sec: 0.3
+    # Existing v14 firmware stops after 2 s without a command. Repeat the
+    # current drive command every 0.5 s to keep it alive with ample margin.
+    firmware_heartbeat_sec: 0.5
+    # ROS stages: -3..3. Firmware mapping: 0->1, +1..3->2..4, -1..-3->6..8.
+    maximum_abs_stage: 3
+    maximum_steering_deg: 27.0
+    require_fresh_feedback: true
+    # Current v14 returns telemetry on the harmless S status query.
+    legacy_status_poll_hz: 10.0
+    # Allow the Mega bootloader and v21 setup banner to finish before polling.
+    status_poll_start_delay_sec: 2.5
+
+    # Disabled for generic bridge launches. The full vehicle autonomy launch
+    # overrides these values to drive straight at stage 2 for 2 seconds after arm.
+    startup_straight_duration_sec: 0.0
+    startup_straight_stage: 2
+    startup_auto_center_enabled: false
+    imu_yaw_topic: /imu_yaw
+    imu_valid_topic: /imu_valid
+    calibration_input_timeout_sec: 0.3
+    calibration_minimum_distance_m: 0.2
+    calibration_maximum_yaw_deg: 20.0
+    calibration_wheelbase_m: 0.73
+    # IMU +Yaw is left/CCW; this vehicle's +steering command is right.
+    calibration_yaw_to_steering_sign: 1.0
+    calibration_maximum_trim_deg: 5.0

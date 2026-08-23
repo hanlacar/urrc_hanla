@@ -1,0 +1,32 @@
+yolo_camera:
+  ros__parameters:
+    weights: "/home/parkjinwoo/camera_ws/models/hanla_yolo11n_seg_best.pt"
+    input_topic: "/camera/image_raw"
+    output_topic: "/perception/detections_image"
+    inference_fps: 15.0
+    confidence: 0.35
+    iou: 0.45
+    image_size: 640
+    # Empty means automatic selection. Examples: "0" for CUDA or "cpu".
+    device: ""
+    road_class_names: ["road", "drivable_area"]
+    path_band_count: 16
+    path_minimum_pixels: 20
+    path_top_ratio: 0.35
+    # CameraInfo supplies fx/fy/cx/cy. Measure the mounting values below.
+    # Metric path publication remains locked while height/pitch are zero.
+    camera_info_topic: "/camera/camera_info"
+    camera_height_m: 0.0
+    camera_pitch_down_deg: 0.0
+    camera_forward_offset_m: 0.0
+    camera_lateral_offset_m: 0.0
+    # Vehicle pitch from ROS REP-103 IMU orientation compensates slopes.
+    imu_topic: "/imu/data"
+    imu_valid_topic: "/imu/valid"
+    use_imu_pitch_compensation: true
+    require_fresh_imu: true
+    imu_timeout_sec: 0.25
+    imu_pitch_sign: 1.0
+    imu_pitch_offset_deg: 0.0
+    path_minimum_forward_m: 0.2
+    path_maximum_forward_m: 10.0

@@ -1,0 +1,41 @@
+# YOLO / Python virtual environment
+.yolo_runtime/
+**/.yolo_runtime/
+.venv/
+**/.venv/
+venv/
+**/venv/
+
+# ROS2 generated folders
+build/
+install/
+log/
+**/build/
+**/install/
+**/log/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Misc
+*.cache
+.DS_Store
+
+# Logs
+*.log
+
+# Archives / backups
+*.tar.gz
+*.zip
+
+# YOLO weights
+*.pt
+*.engine
+*.onnx

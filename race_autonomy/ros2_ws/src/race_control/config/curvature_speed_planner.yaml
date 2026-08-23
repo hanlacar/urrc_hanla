@@ -1,0 +1,18 @@
+curvature_speed_planner_node:
+  ros__parameters:
+    path_topic: /camera/path
+    path_valid_topic: /camera/path_valid
+    path_confidence_topic: /camera/path_confidence
+    output_stage_topic: /control/curvature_drive_stage
+    output_curvature_topic: /control/path_curvature
+    output_valid_topic: /control/curvature_plan_valid
+    output_status_topic: /control/curvature_speed_status
+    minimum_path_confidence: 0.45
+    path_timeout_sec: 0.5
+    sample_spacing_m: 0.4
+    slow_curvature_per_m: 0.25
+    stop_curvature_per_m: 0.60
+    high_curvature_stop_hold_sec: 1.0
+    cruise_stage: 2
+    slow_stage: 1
+    publish_rate_hz: 20.0

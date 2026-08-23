@@ -1,0 +1,14 @@
+course_mission_node:
+  ros__parameters:
+    ramp_pitch_deg: 5.0
+    ramp_delay_sec: 0.5
+    ramp_slow_pitch_deg: 10.0
+    # Hold stage 2 with centered steering for 3 s after pitch reaches 10 deg.
+    ramp_slow_hold_sec: 3.0
+    ramp_level_pitch_deg: 3.0
+    # Camera -> front axle: 0.73 - 0.245 = 0.485 m; front overhang: 0.27 m.
+    camera_to_front_bumper_m: 0.755
+    desired_front_bumper_clearance_m: 0.5
+    minimum_stop_sec: 0.5
+    command_rate_hz: 20.0
+    sensor_timeout_sec: 0.5

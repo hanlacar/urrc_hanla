@@ -1,0 +1,21 @@
+camera_yolo_inference_node:
+  ros__parameters:
+    segmentation_model_path: ""
+    class_manifest_path: ""
+    device: cuda:0
+    input_width: 640
+    input_height: 480
+    inference_fps: 40.0
+    detections_image_fps: 30.0
+    confidence_threshold: 0.25
+    mask_threshold: 0.50
+    max_image_age_sec: 0.40
+    # Measured CPU inference is normally 74-191 ms; retain margin for jitter.
+    max_inference_latency_ms: 40.0
+    input_image_topic: /camera/image_raw
+    input_camera_info_topic: /camera/camera_info
+    stop_detected_topic: /perception/stop_detected
+    stop_confidence_threshold: 0.25
+    publish_diagnostics: true
+    require_cuda: true
+    use_sim_time: false

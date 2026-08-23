@@ -1,0 +1,15 @@
+lane_center:
+  ros__parameters:
+    input_topic: "/camera/camera/color/image_raw"
+    roi_top_ratio: 0.52
+    roi_top_width_ratio: 0.45
+    white_saturation_max: 80
+    white_value_min: 180
+    minimum_band_pixels: 30
+    minimum_points_per_line: 4
+    lookahead_ratio: 0.68
+    # Initial image-to-ground approximation; replace with measured calibration.
+    path_near_distance_m: 0.5
+    path_far_distance_m: 6.0
+    path_lateral_span_near_m: 3.0
+    path_lateral_span_far_m: 1.2

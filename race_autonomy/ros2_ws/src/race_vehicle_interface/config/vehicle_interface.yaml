@@ -1,0 +1,27 @@
+vehicle_interface_node:
+  ros__parameters:
+    # Safety lock: do not change until the motor driver contract is verified.
+    allow_actuation: false
+    steering_only: false
+
+    encoder_topic: /inpulse
+    rpm_topic: /rpm
+    steering_feedback_topic: /steer_angle
+    target_speed_topic: /camera/target_speed_mps
+    target_steering_topic: /camera/target_steering_deg
+    cmd_driving_topic: /mcu_drive
+    cmd_steer_topic: /mcu_wheel
+
+    # Encoder is expected at 10 Hz; 0.5 s permits several missed samples.
+    feedback_timeout_sec: 0.5
+    target_timeout_sec: 0.3
+    command_rate_hz: 20.0
+
+    maximum_steering_deg: 27.0
+    # Measured calibration: forward stage 3 (PWM 100) = 2.98 km/h
+    # = 0.827777... m/s. Linear command conversion: 3 / 0.827777... = 3.62416.
+    # allow_actuation remains false, so this calibration does not unlock motion.
+    maximum_abs_stage: 3
+    stage_per_mps: 3.6241610738
+    stage_sign: 1.0
+    steering_sign: 1.0
