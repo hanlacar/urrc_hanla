@@ -4,8 +4,10 @@ ROS 2 Jazzy adapter from an Ultralytics **segmentation** model to the existing
 `camera_navigation` external-mask contract. It does not implement geometry,
 Pure Pursuit, speed planning, or actuator commands.
 
-The deployment includes a fixed-shape `640x480`, batch-1, FP16 TensorRT engine
-built for the local MX450. Ultralytics is lazy-imported when the node loads the
+The default deployment model is `hanla_yolo11n_seg_0811_best.engine`, exported
+from `combined_0811_seg-2/weights/best.pt`. It is a fixed-shape `640x480`,
+batch-1, FP16 TensorRT engine built for the local MX450. Ultralytics is
+lazy-imported when the node loads the
 engine. A detection checkpoint, missing road mapping, CUDA
 requirement violation, stale/mismatched image, empty road, NaN mask, or latency
 limit produces `perception_valid=false` and zero masks with the input header.

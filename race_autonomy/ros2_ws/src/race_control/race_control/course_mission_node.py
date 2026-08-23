@@ -20,21 +20,22 @@ class CourseMissionNode(Node):
             "ramp_pitch_deg": 5.0, "ramp_delay_sec": 0.5,
             "ramp_slow_pitch_deg": 10.0, "ramp_slow_hold_sec": 3.0,
             "ramp_level_pitch_deg": 3.0,
-            "camera_to_front_bumper_m": 0.755,
-            "desired_front_bumper_clearance_m": 0.5,
-            "minimum_stop_sec": 0.5,
+            "stop_line_trigger_distance_m": 2.0,
+            "minimum_stop_sec": 2.0,
+            "green_confirm_sec": 2.0,
+            "actual_stop_speed_mps": 0.05,
             "command_rate_hz": 20.0,
             "sensor_timeout_sec": 0.5,
         }
         for name, value in defaults.items(): self.declare_parameter(name, value)
-        self.stop_depth_threshold_m = (
-            float(self.p("camera_to_front_bumper_m")) +
-            float(self.p("desired_front_bumper_clearance_m")))
+        self.stop_depth_threshold_m = float(
+            self.p("stop_line_trigger_distance_m"))
         self.logic = CourseMission(
             self.p("ramp_pitch_deg"), self.p("ramp_delay_sec"),
             self.stop_depth_threshold_m, self.p("minimum_stop_sec"),
             self.p("ramp_level_pitch_deg"), self.p("ramp_slow_pitch_deg"),
-            self.p("ramp_slow_hold_sec"))
+            self.p("ramp_slow_hold_sec"), self.p("green_confirm_sec"),
+            self.p("actual_stop_speed_mps"))
         self.data = MissionInput()
         self.updated = {}
         self.ramp_section_override = False
@@ -63,6 +64,8 @@ class CourseMissionNode(Node):
         self.sub(Bool, "/control/curvature_plan_valid", "speed_plan_valid", bool)
         self.sub(Float32, "/camera/yellow_line_ahead_m", "yellow_ahead_m", float)
         self.sub(Bool, "/camera/yellow_line_ahead_valid", "yellow_ahead_valid", bool)
+        self.sub(Float32, "/vehicle/speed_mps", "speed_mps", float)
+        self.sub(Bool, "/vehicle/speed_valid", "speed_valid", bool)
         self.create_timer(1.0/max(1.0,float(self.p("command_rate_hz"))), self.control)
 
     def p(self,name): return self.get_parameter(name).value
@@ -114,6 +117,8 @@ class CourseMissionNode(Node):
             traffic20_detected=self.data.traffic20_detected and fresh("traffic20_detected"),
             yellow_ahead_valid=(self.data.yellow_ahead_valid and
                                 fresh("yellow_ahead_valid", "yellow_ahead_m")),
+            speed_valid=(self.data.speed_valid and
+                         fresh("speed_valid", "speed_mps")),
         )
         output = self.logic.update(safe)
         if self.logic.section_request is not None:

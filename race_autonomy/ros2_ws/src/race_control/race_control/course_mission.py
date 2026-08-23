@@ -6,6 +6,7 @@ from dataclasses import dataclass
 LEFT, STRAIGHT, RIGHT = -1, 0, 1
 CAMERA = 1
 INTERSECTIONS = {4, 6, 8, 11}
+YELLOW_REPLAN_SECTIONS = {5}
 
 
 def section_after_ramp_detection(section, imu_valid, pitch_deg,
@@ -40,6 +41,8 @@ class MissionInput:
     planned_drive_stage: int = 2
     yellow_ahead_m: float = float("inf")
     yellow_ahead_valid: bool = False
+    speed_mps: float = 0.0
+    speed_valid: bool = False
 
 
 @dataclass
@@ -53,9 +56,10 @@ class MissionOutput:
 
 class CourseMission:
     def __init__(self, ramp_pitch_deg=5.0, ramp_delay_sec=0.5,
-                 stop_distance_m=0.5, minimum_stop_sec=0.5,
+                 stop_distance_m=2.0, minimum_stop_sec=2.0,
                  ramp_level_pitch_deg=3.0, ramp_slow_pitch_deg=10.0,
-                 ramp_slow_hold_sec=3.0):
+                 ramp_slow_hold_sec=3.0, green_confirm_sec=2.0,
+                 actual_stop_speed_mps=0.05):
         self.ramp_pitch_deg = float(ramp_pitch_deg)
         self.ramp_delay_sec = float(ramp_delay_sec)
         self.stop_distance_m = float(stop_distance_m)
@@ -63,6 +67,8 @@ class CourseMission:
         self.ramp_level_pitch_deg = float(ramp_level_pitch_deg)
         self.ramp_slow_pitch_deg = float(ramp_slow_pitch_deg)
         self.ramp_slow_hold_sec = float(ramp_slow_hold_sec)
+        self.green_confirm_sec = float(green_confirm_sec)
+        self.actual_stop_speed_mps = float(actual_stop_speed_mps)
         self.section = None
         self.ramp_trigger_time = None
         self.ramp_crossing = False
@@ -74,11 +80,10 @@ class CourseMission:
         self.yellow_handled = False
         self.intersection_stop_time = None
         self.intersection_released = False
+        self.green_confirm_start_time = None
         self.final_stopped = False
         self.traffic20_start_time = None
         self.traffic20_confirmed = False
-        self.yellow_stop_time = None
-        self.yellow_handled = False
 
     def enter_section(self, section):
         if section == self.section:
@@ -89,14 +94,18 @@ class CourseMission:
         self.ramp_slow_start_time = None
         self.ramp_slow_latched = False
         self.ramp_level_start_time = None
+        self.section_request = None
+        self.yellow_stop_time = None
+        self.yellow_handled = False
         self.intersection_stop_time = None
         self.intersection_released = False
+        self.green_confirm_start_time = None
         self.traffic20_start_time = None
         if section == 9:
             self.traffic20_confirmed = False
         if section != 13:
             self.final_stopped = False
-        return
+        return True
 
     @staticmethod
     def stopped(status, mode=CAMERA, direction=STRAIGHT):
@@ -116,9 +125,12 @@ class CourseMission:
         section = self.section
         direction = data.gps_direction if data.gps_direction in (LEFT, STRAIGHT, RIGHT) else STRAIGHT
 
-        if not data.yellow_ahead_valid or data.yellow_ahead_m >= 1.2:
+        yellow_replan_enabled = section in YELLOW_REPLAN_SECTIONS
+        if (not yellow_replan_enabled or not data.yellow_ahead_valid or
+                data.yellow_ahead_m >= 1.2):
             self.yellow_handled = False
-        if (data.yellow_ahead_valid and data.yellow_ahead_m <= 1.0 and
+        if (yellow_replan_enabled and data.yellow_ahead_valid and
+                data.yellow_ahead_m <= 1.0 and
                 not self.yellow_handled and self.yellow_stop_time is None):
             self.yellow_stop_time = data.now
             self.yellow_handled = True
@@ -177,17 +189,47 @@ class CourseMission:
 
         if section in INTERSECTIONS:
             if not data.camera_path_valid:
+                self.green_confirm_start_time = None
                 return self.stopped("SAFE_STOP:CAMERA_PATH_INVALID", CAMERA, direction)
+            if self.intersection_released:
+                return self.camera_output(
+                    data, data.camera_steering_deg, "INTERSECTION_GO", direction)
+            if not data.stop_detected or not data.stop_distance_valid:
+                self.green_confirm_start_time = None
+                return self.stopped(
+                    "INTERSECTION_WAIT_STOP_LINE_DISTANCE", CAMERA, direction)
             at_line = (data.stop_distance_valid and
                        data.stop_distance_m <= self.stop_distance_m)
-            if at_line and self.intersection_stop_time is None:
+            if not at_line:
+                return self.camera_output(
+                    data, data.camera_steering_deg,
+                    "INTERSECTION_APPROACH_STOP_LINE", direction)
+            actually_stopped = (
+                data.speed_valid and
+                abs(float(data.speed_mps)) <= self.actual_stop_speed_mps)
+            if not actually_stopped:
+                self.intersection_stop_time = None
+                self.green_confirm_start_time = None
+                return self.stopped(
+                    "INTERSECTION_WAIT_ACTUAL_STOP", CAMERA, direction)
+            if self.intersection_stop_time is None:
                 self.intersection_stop_time = data.now
             if self.intersection_stop_time is not None and not self.intersection_released:
                 stopped_long_enough = data.now - self.intersection_stop_time >= self.minimum_stop_sec
-                if stopped_long_enough and data.traffic_green:
-                    self.intersection_released = True
-                else:
+                if not stopped_long_enough:
+                    self.green_confirm_start_time = None
                     return self.stopped("INTERSECTION_WAIT_GREEN", CAMERA, direction)
+                if not data.traffic_green:
+                    self.green_confirm_start_time = None
+                    return self.stopped("INTERSECTION_WAIT_GREEN", CAMERA, direction)
+                if self.green_confirm_start_time is None:
+                    self.green_confirm_start_time = data.now
+                green_elapsed = data.now - self.green_confirm_start_time
+                if green_elapsed < self.green_confirm_sec:
+                    return self.stopped(
+                        f"INTERSECTION_CONFIRM_GREEN_{green_elapsed:.1f}SEC",
+                        CAMERA, direction)
+                self.intersection_released = True
             return self.camera_output(
                 data, data.camera_steering_deg, "INTERSECTION_GO", direction)
 

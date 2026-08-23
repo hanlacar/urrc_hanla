@@ -111,19 +111,78 @@ def test_ramp_pitch_ten_holds_stage_two_for_three_seconds_without_stop_line():
 
 def test_yellow_line_one_meter_stops_then_uses_valid_replanned_path():
     logic = CourseMission()
-    stopped = logic.update(data(1, 1.0, yellow_ahead_valid=True, yellow_ahead_m=1.0))
+    stopped = logic.update(data(5, 1.0, yellow_ahead_valid=True, yellow_ahead_m=1.0))
     assert stopped.stage == 0
-    assert logic.update(data(1, 1.49, yellow_ahead_valid=True, yellow_ahead_m=0.9)).stage == 0
-    resumed = logic.update(data(1, 1.5, yellow_ahead_valid=True, yellow_ahead_m=0.9))
+    assert logic.update(data(5, 1.49, yellow_ahead_valid=True, yellow_ahead_m=0.9)).stage == 0
+    resumed = logic.update(data(5, 1.5, yellow_ahead_valid=True, yellow_ahead_m=0.9))
     assert (resumed.stage, resumed.steering_deg) == (1, 4.0)
+
+
+def intersection_data(now, **kwargs):
+    values = dict(stop_detected=True, stop_distance_valid=True,
+                  stop_distance_m=0.5, speed_valid=True, speed_mps=0.0)
+    values.update(kwargs)
+    return data(4, now, **values)
 
 
 def test_intersection_stops_half_meter_and_releases_on_green():
     logic = CourseMission(minimum_stop_sec=0.5)
-    stopped = logic.update(data(4, 1.0, stop_distance_valid=True, stop_distance_m=0.5))
+    stopped = logic.update(intersection_data(1.0))
     assert stopped.stage == 0
-    assert logic.update(data(4, 1.4, traffic_green=True)).stage == 0
-    assert logic.update(data(4, 1.5, traffic_green=True, gps_direction=-1)).stage == 1
+    assert logic.update(intersection_data(1.4, traffic_green=True)).stage == 0
+    confirming = logic.update(intersection_data(1.5, traffic_green=True))
+    assert confirming.stage == 0
+    assert confirming.status == "INTERSECTION_CONFIRM_GREEN_0.0SEC"
+    assert logic.update(intersection_data(3.49, traffic_green=True)).stage == 0
+    assert logic.update(intersection_data(
+        3.5, traffic_green=True, gps_direction=-1)).stage == 1
+    released = logic.update(data(4, 3.6, stop_detected=False,
+                                 stop_distance_valid=False))
+    assert released.stage == 1
+    assert released.status == "INTERSECTION_GO"
+
+
+def test_intersection_green_confirmation_resets_when_signal_breaks():
+    logic = CourseMission(minimum_stop_sec=0.0, green_confirm_sec=2.0)
+    logic.update(intersection_data(1.0, traffic_green=True))
+    assert logic.update(intersection_data(2.0, traffic_green=False)).stage == 0
+    assert logic.update(intersection_data(3.0, traffic_green=True)).stage == 0
+    assert logic.update(intersection_data(4.99, traffic_green=True)).stage == 0
+    assert logic.update(intersection_data(5.0, traffic_green=True)).stage == 1
+
+
+def test_intersection_requires_stop_distance_and_actual_encoder_stop():
+    logic = CourseMission(minimum_stop_sec=0.0)
+    missing = logic.update(data(4, 1.0, stop_detected=False,
+                                stop_distance_valid=False))
+    assert missing.stage == 0
+    assert missing.status == "INTERSECTION_WAIT_STOP_LINE_DISTANCE"
+    moving = logic.update(intersection_data(2.0, speed_mps=0.2))
+    assert moving.stage == 0
+    assert moving.status == "INTERSECTION_WAIT_ACTUAL_STOP"
+
+
+def test_intersection_stops_at_two_meter_threshold():
+    logic = CourseMission(stop_distance_m=2.0, minimum_stop_sec=2.0)
+    approaching = logic.update(intersection_data(
+        1.0, stop_distance_m=2.01, speed_mps=0.2))
+    assert approaching.stage == 1
+    assert approaching.status == "INTERSECTION_APPROACH_STOP_LINE"
+    threshold = logic.update(intersection_data(
+        1.1, stop_distance_m=2.0, speed_mps=0.2))
+    assert threshold.stage == 0
+    assert threshold.status == "INTERSECTION_WAIT_ACTUAL_STOP"
+
+
+def test_invalid_camera_path_resets_green_confirmation():
+    logic = CourseMission(minimum_stop_sec=0.0, green_confirm_sec=2.0)
+    logic.update(intersection_data(1.0, traffic_green=True))
+    invalid = logic.update(intersection_data(
+        2.0, traffic_green=True, camera_path_valid=False))
+    assert invalid.stage == 0
+    assert logic.update(intersection_data(3.0, traffic_green=True)).stage == 0
+    assert logic.update(intersection_data(4.99, traffic_green=True)).stage == 0
+    assert logic.update(intersection_data(5.0, traffic_green=True)).stage == 1
 
 
 def test_parking_sections_keep_camera_candidate_for_mcu_priority():
