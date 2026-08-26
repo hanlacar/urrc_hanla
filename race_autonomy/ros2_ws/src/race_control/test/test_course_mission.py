@@ -26,6 +26,16 @@ def test_non_ramp_camera_sections_are_limited_to_stage_one():
         assert (out.stage, out.steering_deg, out.control_mode) == (1, 4.0, CAMERA)
 
 
+def test_missing_gps_section_and_direction_still_starts_with_camera_path():
+    logic = CourseMission()
+    output = logic.update(MissionInput(
+        camera_path_valid=True, camera_steering_deg=-3.0,
+        speed_plan_valid=True, planned_drive_stage=1))
+    assert (output.stage, output.steering_deg, output.control_mode) == (
+        1, -3.0, CAMERA)
+    assert output.status == "START"
+
+
 def test_section_five_uses_pure_pursuit_camera_steering():
     logic = CourseMission()
     output = logic.update(data(5, camera_steering_deg=-17.4,
@@ -41,9 +51,10 @@ def test_ramp_stops_aligns_then_drives_straight_and_reacquires_path():
     assert (stopped.stage, stopped.steering_deg) == (0, 0.0)
     straight = logic.update(data(2, 10.5, imu_valid=True, pitch_deg=11.0,
                                  camera_path_valid=False))
-    assert (straight.stage, straight.steering_deg) == (2, 0.0)
+    assert (straight.stage, straight.steering_deg) == (0, 0.0)
+    assert straight.status == "RAMP:SLOPE_PATH_INVALID"
     confirming = logic.update(data(2, 11.0, imu_valid=True, pitch_deg=2.5))
-    assert (confirming.stage, confirming.steering_deg) == (1, 0.0)
+    assert (confirming.stage, confirming.steering_deg) == (1, 4.0)
     resumed = logic.update(data(2, 12.0, imu_valid=True, pitch_deg=2.5))
     assert (resumed.stage, resumed.steering_deg) == (1, 4.0)
 
@@ -55,18 +66,24 @@ def test_ramp_stops_and_centers_wheels_at_exactly_five_degrees():
     assert output.stage == 0
     assert output.steering_deg == 0.0
     assert output.status == "RAMP:ALIGN_WHEELS"
+    following = logic.update(data(
+        2, 1.5, imu_valid=True, pitch_deg=5.0,
+        camera_path_valid=True, camera_steering_deg=7.0))
+    assert (following.stage, following.steering_deg) == (2, 7.0)
+    assert following.status == "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC"
 
 
-def test_ramp_pitch_ten_must_hold_one_second_before_stage_one():
+def test_ramp_slope_uses_stage_two_path_then_latches_stage_one_after_hold():
     logic = CourseMission(ramp_slow_pitch_deg=10.0, ramp_slow_hold_sec=1.0)
     logic.update(data(2, 0.0, imu_valid=True, pitch_deg=5.0))
     before = logic.update(data(2, 0.5, imu_valid=True, pitch_deg=10.0))
-    assert (before.stage, before.steering_deg) == (2, 0.0)
+    assert (before.stage, before.steering_deg) == (2, 4.0)
+    assert before.status == "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC"
     still_before = logic.update(data(2, 1.49, imu_valid=True, pitch_deg=10.0))
-    assert still_before.stage == 2
+    assert (still_before.stage, still_before.steering_deg) == (2, 4.0)
     slowed = logic.update(data(2, 1.5, imu_valid=True, pitch_deg=10.0))
-    assert (slowed.stage, slowed.steering_deg) == (1, 0.0)
-    assert slowed.status == "RAMP:PITCH_10_STRAIGHT_LATCHED"
+    assert (slowed.stage, slowed.steering_deg) == (1, 4.0)
+    assert slowed.status == "RAMP:SLOPE_STAGE_1_PATH_LATCHED"
 
 
 def test_ramp_slow_straight_latches_until_level_then_reacquires_path():
@@ -75,14 +92,14 @@ def test_ramp_slow_straight_latches_until_level_then_reacquires_path():
     logic.update(data(2, 0.5, imu_valid=True, pitch_deg=10.0))
     latched = logic.update(data(2, 1.5, imu_valid=True, pitch_deg=10.0,
                                 camera_steering_deg=20.0))
-    assert (latched.stage, latched.steering_deg) == (1, 0.0)
+    assert (latched.stage, latched.steering_deg) == (1, 20.0)
     descending = logic.update(data(2, 2.0, imu_valid=True, pitch_deg=6.0,
                                    camera_steering_deg=20.0))
-    assert (descending.stage, descending.steering_deg) == (1, 0.0)
+    assert (descending.stage, descending.steering_deg) == (1, 20.0)
     confirming = logic.update(data(2, 2.5, imu_valid=True, pitch_deg=3.0,
                                    camera_path_valid=True, camera_steering_deg=4.0))
-    assert (confirming.stage, confirming.steering_deg) == (1, 0.0)
-    assert confirming.status == "RAMP:LEVEL_CONFIRM_1SEC"
+    assert (confirming.stage, confirming.steering_deg) == (1, 4.0)
+    assert confirming.status == "RAMP:LEVEL_CONFIRM_1SEC_PATH_FOLLOW"
     level = logic.update(data(2, 3.5, imu_valid=True, pitch_deg=3.0,
                               camera_path_valid=True, camera_steering_deg=4.0))
     assert (level.stage, level.steering_deg) == (1, 4.0)
@@ -90,23 +107,26 @@ def test_ramp_slow_straight_latches_until_level_then_reacquires_path():
     assert logic.section_request == 3
 
 
-def test_ramp_pitch_ten_hold_resets_when_pitch_drops():
+def test_ramp_stage_two_timer_survives_a_small_pitch_drop():
     logic = CourseMission(ramp_slow_pitch_deg=10.0, ramp_slow_hold_sec=1.0)
     logic.update(data(2, 0.0, imu_valid=True, pitch_deg=5.0))
     logic.update(data(2, 0.5, imu_valid=True, pitch_deg=10.0))
     logic.update(data(2, 1.0, imu_valid=True, pitch_deg=9.9))
-    assert logic.update(data(2, 1.5, imu_valid=True, pitch_deg=10.0)).stage == 2
+    assert logic.update(data(2, 1.5, imu_valid=True, pitch_deg=10.0)).stage == 1
 
 
-def test_ramp_pitch_ten_holds_stage_two_for_three_seconds_without_stop_line():
+def test_ramp_holds_stage_two_path_for_three_seconds_then_uses_stage_one():
     logic = CourseMission(ramp_slow_hold_sec=3.0)
     logic.update(data(2, 10.0, imu_valid=True, pitch_deg=10.0))
-    held = logic.update(data(2, 12.99, imu_valid=True, pitch_deg=11.0,
-                             stop_detected=False, camera_path_valid=False))
-    assert (held.stage, held.steering_deg) == (2, 0.0)
-    assert held.status == "RAMP:PITCH_10_STAGE_2_HOLD"
-    slowed = logic.update(data(2, 13.0, imu_valid=True, pitch_deg=11.0))
-    assert (slowed.stage, slowed.steering_deg) == (1, 0.0)
+    logic.update(data(2, 10.5, imu_valid=True, pitch_deg=11.0))
+    held = logic.update(data(2, 13.49, imu_valid=True, pitch_deg=11.0,
+                             stop_detected=False, camera_path_valid=True,
+                             camera_steering_deg=-6.0))
+    assert (held.stage, held.steering_deg) == (2, -6.0)
+    assert held.status == "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC"
+    slowed = logic.update(data(2, 13.5, imu_valid=True, pitch_deg=11.0))
+    assert (slowed.stage, slowed.steering_deg) == (1, 4.0)
+    assert slowed.status == "RAMP:SLOPE_STAGE_1_PATH_LATCHED"
 
 
 def test_yellow_line_one_meter_stops_then_uses_valid_replanned_path():
@@ -151,6 +171,18 @@ def test_intersection_green_confirmation_resets_when_signal_breaks():
     assert logic.update(intersection_data(5.0, traffic_green=True)).stage == 1
 
 
+def test_opencv_confirmed_red_stops_and_green_can_release_after_safety_hold():
+    logic = CourseMission(minimum_stop_sec=0.0, green_confirm_sec=0.0)
+    red = logic.update(intersection_data(
+        1.0, traffic_red=True, traffic_green=False))
+    assert red.stage == 0
+    assert red.status == "INTERSECTION_RED_STOP"
+    green = logic.update(intersection_data(
+        1.1, traffic_red=False, traffic_green=True))
+    assert green.stage == 1
+    assert green.status == "INTERSECTION_GO"
+
+
 def test_intersection_requires_stop_distance_and_actual_encoder_stop():
     logic = CourseMission(minimum_stop_sec=0.0)
     missing = logic.update(data(4, 1.0, stop_detected=False,
@@ -189,10 +221,10 @@ def test_parking_sections_keep_camera_candidate_for_mcu_priority():
     logic = CourseMission()
     out = logic.update(data(7, camera_steering_deg=-8.0))
     assert (out.stage, out.steering_deg, out.control_mode) == (1, -8.0, CAMERA)
-    assert out.status == "T_COURSE:CAMERA_STANDBY"
+    assert out.status == "T_COURSE:PATH_FOLLOW_PUBLISHING"
     out = logic.update(data(10, camera_steering_deg=6.0))
     assert (out.stage, out.steering_deg, out.control_mode) == (1, 6.0, CAMERA)
-    assert out.status == "PARALLEL_PARK:CAMERA_STANDBY"
+    assert out.status == "PARALLEL_PARK:PATH_FOLLOW_PUBLISHING"
 
 
 def test_traffic20_section_latches_cruise_stage_two_to_three():

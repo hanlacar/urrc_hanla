@@ -5,6 +5,7 @@ import math
 import time
 
 import rclpy
+from rclpy._rclpy_pybind11 import RCLError
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, Int32, String
 
@@ -76,7 +77,7 @@ class CmdMuxNode(Node):
         self.active_pub = self.create_publisher(String, "/cmd_mux/active", 10)
         self.status_pub = self.create_publisher(String, "/cmd_mux/status", 10)
         rate = max(1.0, float(self.param("publish_hz")))
-        self.create_timer(1.0 / rate, self.tick)
+        self.publish_timer = self.create_timer(1.0 / rate, self.tick)
 
     def param(self, name):
         return self.get_parameter(name).value
@@ -134,6 +135,8 @@ class CmdMuxNode(Node):
         return source, "ACTIVE"
 
     def tick(self):
+        if not rclpy.ok():
+            return
         source, reason = self.select()
         if source is None:
             drive = 0.0
@@ -144,10 +147,15 @@ class CmdMuxNode(Node):
             steer_limit = max(0.0, float(self.param("maximum_steering_deg")))
             drive = max(-float(limit), min(float(limit), state.drive))
             wheel = int(round(max(-steer_limit, min(steer_limit, state.wheel))))
-        self.drive_pub.publish(Float32(data=float(drive)))
-        self.wheel_pub.publish(Int32(data=int(wheel)))
-        self.active_pub.publish(String(data=source or "stop"))
-        self.status_pub.publish(String(data=f"{reason};mode={self.mode}"))
+        try:
+            self.drive_pub.publish(Float32(data=float(drive)))
+            self.wheel_pub.publish(Int32(data=int(wheel)))
+            self.active_pub.publish(String(data=source or "stop"))
+            self.status_pub.publish(String(data=f"{reason};mode={self.mode}"))
+        except RCLError:
+            # SIGINT may invalidate the context while this timer callback is
+            # already executing.  Shutdown must remain clean and idempotent.
+            return
         if source != self.active:
             self.get_logger().info(
                 f"command source: {self.active or 'stop'} -> {source or 'stop'} "
@@ -155,9 +163,14 @@ class CmdMuxNode(Node):
             self.active = source
 
     def destroy_node(self):
+        if hasattr(self, "publish_timer"):
+            self.publish_timer.cancel()
         if rclpy.ok():
-            self.drive_pub.publish(Float32(data=0.0))
-            self.wheel_pub.publish(Int32(data=int(round(float(self.param("stop_steering_deg"))))))
+            try:
+                self.drive_pub.publish(Float32(data=0.0))
+                self.wheel_pub.publish(Int32(data=int(round(float(self.param("stop_steering_deg"))))))
+            except RCLError:
+                pass
         return super().destroy_node()
 
 

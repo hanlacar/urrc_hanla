@@ -67,7 +67,7 @@ def stage_for_curvature(curvature, slow_threshold=0.25, stop_threshold=0.60,
 
 
 class CurvatureStagePlanner:
-    """Stop once on entry to a sharp curve, then continue at the slow stage."""
+    """Reduce speed on a sharp curve without creating stop/go oscillation."""
 
     def __init__(self):
         self.high_curvature_active = False
@@ -85,11 +85,8 @@ class CurvatureStagePlanner:
 
         value = abs(float(curvature))
         if value >= float(stop_threshold):
-            if not self.high_curvature_active:
-                self.high_curvature_active = True
-                self.stop_started_at = float(now)
-            if float(now)-self.stop_started_at < max(0.0, float(stop_hold_sec)):
-                return 0, "HIGH_CURVATURE_STOP"
+            self.high_curvature_active = True
+            self.stop_started_at = None
             return int(slow_stage), "HIGH_CURVATURE_STAGE1"
 
         self.reset()

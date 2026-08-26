@@ -8,6 +8,7 @@ import pytest
 from race_vehicle_interface.serial_protocol import (
     encode_commands,
     encode_drive_command,
+    encode_emergency_brake_command,
     encode_steering_command,
     encoder_delta_to_distance_m,
     encoder_delta_to_speed_mps,
@@ -35,15 +36,15 @@ def test_stage_mapping_and_clamp():
     assert speed_to_stage(-5.0, 5.0, 10) == -10
 
 
-def test_measured_stage_three_speed_maps_to_stage_three():
-    measured_speed_mps = 2.98 / 3.6
-    assert speed_to_stage(measured_speed_mps, 3.0 / measured_speed_mps, 3) == 3
+def test_v29_measured_pwm100_speed_maps_to_ros_stage_two():
+    measured_speed_mps = 0.526
+    assert speed_to_stage(measured_speed_mps, 2.0 / measured_speed_mps, 3) == 2
 
 
 def test_measured_encoder_distance_and_speed_calibration():
-    assert encoder_delta_to_distance_m(5367, 1073.4) == pytest.approx(5.0)
-    assert encoder_delta_to_speed_mps(5367, 9.12, 1073.4) == pytest.approx(
-        5.0 / 9.12
+    assert encoder_delta_to_distance_m(5331, 533.1) == pytest.approx(10.0)
+    assert encoder_delta_to_speed_mps(5331, 9.12, 533.1) == pytest.approx(
+        10.0 / 9.12
     )
 
 
@@ -112,6 +113,10 @@ def test_encode_existing_firmware_drive_commands():
     assert encode_drive_command(-1, 3) == b"6.00\n"
     assert encode_drive_command(-2, 3) == b"7.00\n"
     assert encode_drive_command(-3, 3) == b"8.00\n"
+
+
+def test_encode_v29_emergency_brake_command():
+    assert encode_emergency_brake_command() == b"B\n"
 
 
 def test_encode_proportional_steering_command():

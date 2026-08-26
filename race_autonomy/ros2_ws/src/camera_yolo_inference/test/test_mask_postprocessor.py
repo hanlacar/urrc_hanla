@@ -14,3 +14,15 @@ def test_lane_mask_is_sufficient_navigation_evidence():
     zero=np.zeros((4,4),np.uint8);lane=zero.copy();lane[:,1]=255
     assert has_navigation_mask({"road":zero,"white_line":lane,"yellow_line":zero})
     assert not has_navigation_mask({"road":zero,"white_line":zero,"yellow_line":zero})
+
+def test_lane_component_filter_removes_tiny_and_wide_shallow_blobs():
+    mask=np.zeros((120,200),np.uint8)
+    mask[10:14,10:150]=255
+    mask[20:23,170:173]=255
+    mask[30:115,90:98]=255
+    output=filter_lane_components(mask,minimum_area=20,
+                                  maximum_horizontal_ratio=4.0,
+                                  minimum_horizontal_width=80)
+    assert np.count_nonzero(output[10:14,10:150])==0
+    assert np.count_nonzero(output[20:23,170:173])==0
+    assert np.count_nonzero(output[30:115,90:98])>0

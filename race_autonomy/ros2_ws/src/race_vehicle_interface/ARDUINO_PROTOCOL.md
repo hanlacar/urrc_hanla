@@ -2,17 +2,17 @@
 
 The ROS bridge uses 115200 baud and newline-terminated ASCII frames.
 
-## Arduino to ROS (already verified)
+## Arduino to ROS (T870 v29)
 
 ```text
 T,<encoder_count>,<rpm>,<steering_angle_deg>\n
 ```
 
-The installed Korean v14 firmware emits the same values on demand rather than
-periodically. The bridge sends the non-actuating `S` query at 10 Hz and parses:
+The installed T870 v29 firmware emits `STATUS` on the non-actuating `S` query:
 
 ```text
-[상태] A0=359 편차=-4 누적=0/440 RPM=0.0 오도=0 PWM=0
+STATUS,state,fault,adc,center_adc,drive_pwm,rpm,encoder_count,
+       steering_position_ms,steering_target_ms,steering_limit_ms
 ```
 
 Example:
@@ -21,7 +21,7 @@ Example:
 T,1234,56.7,-12.5
 ```
 
-## ROS to Arduino (existing v14 firmware)
+## ROS to Arduino (T870 v29 firmware)
 
 ROS uses signed stages `-3..3`. The bridge maps them to the firmware lines:
 
@@ -44,17 +44,19 @@ the A0 neutral reference.
 Current measured/assumed vehicle geometry:
 
 ```text
-wheelbase: 0.73 m
-wheel diameter: 0.26 m (radius 0.13 m)
+wheelbase: 0.78 m
+wheel diameter: 0.30 m (radius 0.15 m)
 maximum steering: +/-27 deg
 L1/R1 steering: approximately -/+9 deg until detailed angle calibration
-forward stage 3 (PWM 100): 2.98 km/h = 0.82778 m/s
-linear command calibration: 3.62416 stage/(m/s)
+ROS stage 1 -> firmware 2.00 (PWM 50): 0.229 m/s
+ROS stage 2 -> firmware 3.00 (PWM 100): 0.526 m/s
+ROS stage 3 -> firmware 4.00 (PWM 150): not measured
+linear fallback calibration: 3.8022813688 stage/(m/s), based on stage 2
 ```
 
-`Z` stores the manually aligned steering zero. It is intentionally not sent
-automatically by ROS because an incorrect wheel position would store a bad
-zero.
+`M` sets the current manually aligned steering position as logical zero. It is
+intentionally not sent automatically by ROS because an incorrect wheel
+position would store a bad zero.
 
 The third `T` telemetry field is accumulated steering motor drive time in
 milliseconds, with a documented maximum of about `+/-440 ms`; it is not a
@@ -62,8 +64,8 @@ measured angle. The bridge publishes the raw value on `/steer_position_ms` and
 a linear estimate on `/steer_angle`, using `+/-440 ms == +/-27 deg`. The angle
 must therefore be treated as an estimate until physically calibrated.
 
-The visually aligned straight-ahead position remeasured on 2026-08-17 settles
-at `A0=261`. This value is diagnostic only and is not used to generate steering
+T870 v29 declares its measured straight-center reference as `A0=363`. This
+value is diagnostic only and is not used to generate steering
 commands. The bridge stores it as `steering_neutral_a0` and publishes the raw
 sensor reading on `/steer_a0`, its signed difference from neutral on
 `/steer_a0_error`, and the tolerance check on `/steer_at_neutral`. This A0
@@ -78,12 +80,14 @@ The ROS side also starts locked. Transmission requires all of the following:
    `/mcu_wheel` (`Int32`) messages.
 4. A successful `/arduino_bridge/set_tx_enabled` service call.
 
-The existing v14 firmware has a 2-second communication watchdog. The bridge
-repeats the active drive command every 0.5 seconds. If ROS commands or feedback
+The supplied v29 firmware currently has a 60-second command watchdog intended
+for manual serial testing. The ROS bridge repeats the active drive command
+every 0.5 seconds and independently disarms on stale commands after 0.3 seconds.
+If ROS commands or feedback
 go stale, the bridge sends `1.00` and `C`, then disarms. If the bridge
-crashes or USB disconnects, the firmware watchdog stops the drive within about
-2 seconds. The manual describes this as an automatic deceleration stop, not an
-instant brake; the physical E-Stop remains the emergency stop.
+crashes or USB disconnects, the firmware-only fallback may take up to 60
+seconds; change `DRIVE_COMMAND_TIMEOUT_MS` to 2000 for competition. The physical
+E-Stop remains the emergency stop.
 
 Do the first transmission test with the drive wheels lifted from the ground,
 using forward stage 1 only.

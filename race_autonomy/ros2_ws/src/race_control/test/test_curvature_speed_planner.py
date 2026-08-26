@@ -35,16 +35,16 @@ def test_missing_or_too_short_path_stops():
     assert stage_for_curvature(None) == 0
 
 
-def test_high_curvature_stops_once_then_continues_at_stage_one():
+def test_high_curvature_continues_at_stage_one_without_stop_go():
     planner = CurvatureStagePlanner()
-    assert planner.update(0.7, now=10.0) == (0, "HIGH_CURVATURE_STOP")
-    assert planner.update(0.7, now=10.99) == (0, "HIGH_CURVATURE_STOP")
+    assert planner.update(0.7, now=10.0) == (1, "HIGH_CURVATURE_STAGE1")
+    assert planner.update(0.7, now=10.99) == (1, "HIGH_CURVATURE_STAGE1")
     assert planner.update(0.7, now=11.0) == (1, "HIGH_CURVATURE_STAGE1")
     assert planner.update(0.8, now=12.0) == (1, "HIGH_CURVATURE_STAGE1")
 
 
-def test_leaving_curve_rearms_the_entry_stop():
+def test_leaving_and_reentering_curve_does_not_create_entry_stop():
     planner = CurvatureStagePlanner()
     planner.update(0.7, now=1.0)
     assert planner.update(0.1, now=2.0) == (2, "CRUISE")
-    assert planner.update(0.7, now=3.0) == (0, "HIGH_CURVATURE_STOP")
+    assert planner.update(0.7, now=3.0) == (1, "HIGH_CURVATURE_STAGE1")

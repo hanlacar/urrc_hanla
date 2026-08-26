@@ -47,7 +47,7 @@ def pitch_diagnostics(pitches=(-5.,-10.,-15.)):
     return {"convention":"active vector rotation; v_base = R_mount @ R_optical_to_base @ v_optical","negative_pitch_points_down":bool(consistent and output[1]["base_z"]<0),"samples":output}
 
 
-def pitch_projection_diagnostics(k, pixel=(320.,400.), camera_height=.845, pitches=(-5.,-10.,-15.), distortion_coeffs=None, distortion_model="plumb_bob"):
+def pitch_projection_diagnostics(k, pixel=(320.,400.), camera_height=.85, pitches=(-5.,-10.,-15.), distortion_coeffs=None, distortion_model="plumb_bob"):
     samples=[]
     for pitch in pitches:
         point=CameraGeometry(k,(0.,0.,camera_height),(0.,pitch,0.),distortion_coeffs=distortion_coeffs,distortion_model=distortion_model).pixel_to_ground(*pixel)

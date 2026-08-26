@@ -20,7 +20,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(control_share, "launch", "course_autonomy.launch.py")
         ),
-        launch_arguments={"use_internal_cmd_mux": "true"}.items(),
+        launch_arguments={
+            "use_internal_cmd_mux": "true",
+            "initial_control_mode": "NORMAL",
+        }.items(),
     )
 
     bridge = Node(
@@ -81,7 +84,13 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument("arduino_port", default_value="/dev/ttyACM0"),
+        DeclareLaunchArgument(
+            "arduino_port",
+            default_value=(
+                "/dev/serial/by-id/"
+                "usb-Arduino__www.arduino.cc__0042_14533303731351115201-if00"
+            ),
+        ),
         DeclareLaunchArgument("auto_arm", default_value="false"),
         DeclareLaunchArgument("auto_arm_delay_sec", default_value="7.0"),
         DeclareLaunchArgument("test_duration_sec", default_value="60.0"),

@@ -9,6 +9,9 @@ def test_right_curve():
     p,m=generate_path(np.c_[x,.8-.05*x*x],np.c_[x,-.8-.05*x*x]);assert m==BOTH_BOUNDARIES and p[-1,1]<p[0,1]
 def test_left_only_precedes_road():assert generate_path(left,None,np.c_[x,np.zeros(20)])[1]==LEFT_ONLY
 def test_right_only_precedes_road():assert generate_path(None,right,np.c_[x,np.zeros(20)])[1]==RIGHT_ONLY
+def test_single_yellow_keeps_vehicle_body_clearance():
+    p,m=generate_path(left,None,lane_width_m=.8,minimum_boundary_clearance_m=.535)
+    assert m==LEFT_ONLY and np.allclose(left[:,1]-p[:,1],.535)
 def test_road_only():assert generate_path(None,None,np.c_[x,np.zeros(20)])[1]==ROAD_ONLY
 def test_temporal_hold_within_timeout():assert generate_path(previous=np.c_[x,np.zeros(20)],previous_age_s=.2,hold_timeout_s=.3)[1]==TEMPORAL_HOLD
 def test_temporal_hold_expires():assert generate_path(previous=np.c_[x,np.zeros(20)],previous_age_s=.4,hold_timeout_s=.3)[1]==INVALID

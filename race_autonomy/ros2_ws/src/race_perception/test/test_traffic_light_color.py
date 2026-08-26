@@ -1,7 +1,39 @@
 import cv2
 import numpy as np
 
-from race_perception.traffic_light_color import classify_traffic_light_bgr, clipped_box, fuse_traffic_light_state
+from race_perception.traffic_light_color import (classify_traffic_light_bgr,
+                                                 clipped_box,
+                                                 fuse_traffic_light_state,
+                                                 update_light_vote)
+
+
+def test_color_uses_majority_of_five_valid_frames_inside_zone():
+    votes = []
+    for candidate in ("RED", "GREEN", "RED", "YELLOW"):
+        state, votes = update_light_vote(candidate, True, votes, 5)
+        assert state == "UNKNOWN"
+    state, votes = update_light_vote("RED", True, votes, 5)
+    assert state == "RED"
+    assert votes == ["RED", "GREEN", "RED", "YELLOW", "RED"]
+
+
+def test_unknown_abstains_without_resetting_votes():
+    votes = ["GREEN", "RED"]
+    state, updated = update_light_vote("UNKNOWN", True, votes, 5)
+    assert state == "UNKNOWN"
+    assert updated == votes
+
+
+def test_vote_resets_only_outside_eligible_zone():
+    state, votes = update_light_vote("GREEN", False, ["GREEN", "RED"], 5)
+    assert (state, votes) == ("UNKNOWN", [])
+
+
+def test_tied_or_non_majority_vote_stays_unknown():
+    votes = []
+    for candidate in ("RED", "RED", "GREEN", "GREEN", "YELLOW"):
+        state, votes = update_light_vote(candidate, True, votes, 5)
+    assert state == "UNKNOWN"
 
 
 def solid_hsv(hue):

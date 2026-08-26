@@ -25,11 +25,11 @@ class CameraPathPlanner(Node):
     def __init__(self):
         super().__init__("camera_path_planner_node")
         self.info=None; self.frame=None; self.frame_changed=False
-        self.masks={}; self.mask_meta={}; self.last_accepted_stamp=None; self.perception=False
+        self.masks={}; self.mask_meta={}; self.pending_mask_sets={}; self.latest_mask_stamp_key=None; self.last_accepted_stamp=None; self.perception=False
         self.imu_valid=False; self.pitch=0.; self.roll=0.; self.yaw=0.; self.turn_direction=0; self.section=1
         self.previous=None; self.previous_time=None
         self.turn_sm=TurnStateMachine(); self.turn_template=None
-        defaults={"input_mode":"external","mock_scenario":"STRAIGHT_BOTH","base_frame_id":"base_link","camera_optical_frame_id":"","camera_x_m":.245,"camera_y_m":.004,"camera_z_m":.845,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":0.,"camera_mount_yaw_deg":0.,"vehicle_width_m":.77,"vehicle_length_m":1.26,"front_overhang_m":.27,"rear_overhang_m":.26,"mask_sync_tolerance_sec":.05,"mask_stale_timeout_sec":.2,"temporal_hold_timeout_sec":.3,"turn_progress_timeout_sec":3.,"min_turn_radius_m":1.2,"bev_forward_min_m":.3,"bev_forward_max_m":8.,"bev_left_m":2.,"bev_right_m":2.,"bev_resolution_m_per_pixel":.02,"lane_width_m":.8,"yellow_path_corridor_m":.25,"obstacle_safety_margin_m":.15}
+        defaults={"input_mode":"external","mock_scenario":"STRAIGHT_BOTH","base_frame_id":"base_link","camera_optical_frame_id":"","camera_x_m":.245,"camera_y_m":.004,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-10.,"camera_mount_yaw_deg":0.,"vehicle_width_m":.77,"vehicle_length_m":1.30,"front_overhang_m":.26,"rear_overhang_m":.26,"mask_sync_tolerance_sec":.05,"mask_stale_timeout_sec":.2,"temporal_hold_timeout_sec":.3,"turn_progress_timeout_sec":3.,"min_turn_radius_m":1.2,"bev_forward_min_m":.3,"bev_forward_max_m":8.,"bev_left_m":2.,"bev_right_m":2.,"bev_resolution_m_per_pixel":.02,"lane_width_m":.8,"single_boundary_safety_margin_m":.15,"yellow_path_corridor_m":.25,"obstacle_safety_margin_m":.15,"obstacle_maximum_lateral_step_m":.10}
         for key,value in defaults.items(): self.declare_parameter(key,value)
         self.turn_sm.progress_timeout_s=self.p("turn_progress_timeout_sec")
         self.input_mode=self.p("input_mode")
@@ -64,9 +64,23 @@ class CameraPathPlanner(Node):
         self.frame=incoming; self.info=msg
 
     def on_mask(self,key,msg):
-        self.masks[key]=image_to_mono8(msg)
         stamp=msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9
-        self.mask_meta[key]=MaskMeta(stamp,msg.header.frame_id,msg.width,msg.height,msg.encoding)
+        # The three mask topics are delivered in separate ROS callbacks.  Do not
+        # expose a partially updated set to tick(), otherwise one new mask can be
+        # mixed with two masks from the preceding camera frame and trigger a
+        # false timestamp reversal / emergency stop.
+        stamp_key=(msg.header.stamp.sec,msg.header.stamp.nanosec)
+        batch=self.pending_mask_sets.setdefault(stamp_key,{})
+        batch[key]=(image_to_mono8(msg),MaskMeta(stamp,msg.header.frame_id,msg.width,msg.height,msg.encoding))
+        if len(batch)==3:
+            if self.latest_mask_stamp_key is None or stamp_key>=self.latest_mask_stamp_key:
+                self.masks={name:value[0] for name,value in batch.items()}
+                self.mask_meta={name:value[1] for name,value in batch.items()}
+                self.latest_mask_stamp_key=stamp_key
+            self.pending_mask_sets={k:v for k,v in self.pending_mask_sets.items() if k>stamp_key}
+        elif len(self.pending_mask_sets)>6:
+            oldest=sorted(self.pending_mask_sets)[:-6]
+            for old_key in oldest:self.pending_mask_sets.pop(old_key,None)
 
     def _make_mock(self):
         scenario=self.p("mock_scenario")
@@ -100,11 +114,17 @@ class CameraPathPlanner(Node):
             if len(rows)>20:
                 unique=np.unique(rows); road_points=np.array([bev.bev_to_ground(float(np.median(cols[rows==row])),row) for row in unique])
             age=np.inf if self.previous_time is None else self.now()-self.previous_time
-            path,mode=generate_path(left,right,road_points,self.p("lane_width_m"),self.previous,age,self.p("temporal_hold_timeout_sec"))
+            boundary_clearance = (
+                self.p("vehicle_width_m")/2
+                + self.p("single_boundary_safety_margin_m"))
+            path,mode=generate_path(
+                left,right,road_points,self.p("lane_width_m"),self.previous,
+                age,self.p("temporal_hold_timeout_sec"),boundary_clearance)
             if self.section == 5:
                 corridor = clearance_corridor_path(
                     road, bev, self.p("vehicle_width_m"),
-                    self.p("obstacle_safety_margin_m"))
+                    self.p("obstacle_safety_margin_m"), previous_path=self.previous,
+                    maximum_lateral_step_m=self.p("obstacle_maximum_lateral_step_m"))
                 if len(corridor) >= 2:
                     path,mode=corridor,OBSTACLE_CORRIDOR
                 else:

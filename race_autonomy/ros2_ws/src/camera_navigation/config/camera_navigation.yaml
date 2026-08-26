@@ -8,11 +8,11 @@ camera_path_planner_node:
     # Camera is 0.12 m behind the axle midpoint: 0.73 / 2 - 0.12 = 0.245 m from rear axle.
     camera_x_m: 0.245
     camera_y_m: 0.004
-    camera_z_m: 0.845
+    camera_z_m: 0.85
     camera_mount_roll_deg: 0.0
     # Negative pitch looks downward in this package's REP-103 convention.
     # Keep this equal to the physically measured camera mounting angle.
-    camera_mount_pitch_deg: -5.0
+    camera_mount_pitch_deg: -10.0
     camera_mount_yaw_deg: 0.0
     mask_sync_tolerance_sec: 0.05
     mask_stale_timeout_sec: 0.45
@@ -20,31 +20,35 @@ camera_path_planner_node:
     turn_progress_timeout_sec: 3.0
     min_turn_radius_m: 1.2
     bev_forward_min_m: 0.3
-    bev_forward_max_m: 8.0
+    bev_forward_max_m: 6.0
     bev_left_m: 2.0
     bev_right_m: 2.0
     bev_resolution_m_per_pixel: 0.02
     lane_width_m: 0.8
     # Section 5: inflate road-mask holes by half vehicle width plus this margin.
-    obstacle_safety_margin_m: 0.15
+    obstacle_safety_margin_m: 0.25
+    # Limit frame-to-frame avoidance-path jumps toward a painted boundary.
+    obstacle_maximum_lateral_step_m: 0.10
 camera_path_controller_node:
   ros__parameters:
-    # TEMPORARY only. Wheelbase and steering limit are not measured/confirmed.
+    # Measured body width. Path clearance uses this configured footprint width.
     vehicle_width_m: 0.77
-    # 0.27 m front overhang + 0.73 m wheelbase + 0.26 m rear overhang.
-    vehicle_length_m: 1.26
-    front_overhang_m: 0.27
+    # 0.26 m front overhang + 0.78 m wheelbase + 0.26 m rear overhang.
+    vehicle_length_m: 1.30
+    front_overhang_m: 0.26
     rear_overhang_m: 0.26
-    wheelbase_m: 0.73
+    wheelbase_m: 0.78
     min_lookahead_m: 0.5
     max_lookahead_m: 2.0
     lookahead_speed_gain: 0.5
     max_steering_deg: 27.0
     steering_rate_limit_deg_s: 60.0
-    normal_speed_mps: 1.0
-    turn_speed_mps: 0.4
-    single_boundary_speed_mps: 0.6
-    road_only_speed_mps: 0.35
+    # Match the measured T870 v29 discrete drive speeds. Stage 3/PWM 150
+    # remains unused here until its physical speed is measured.
+    normal_speed_mps: 0.526
+    turn_speed_mps: 0.229
+    single_boundary_speed_mps: 0.526
+    road_only_speed_mps: 0.229
     max_lateral_accel_mps2: 1.0
     accel_limit_mps2: 0.5
     decel_limit_mps2: 1.0

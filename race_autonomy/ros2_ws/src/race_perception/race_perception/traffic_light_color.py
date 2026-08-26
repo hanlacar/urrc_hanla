@@ -5,6 +5,24 @@ import numpy as np
 UNKNOWN = "UNKNOWN"
 
 YOLO_LIGHT_STATES = {"R_light":"RED","Y_light":"YELLOW","G_light":"GREEN"}
+CONFIRMABLE_STATES = {"RED", "YELLOW", "GREEN"}
+
+
+def update_light_vote(candidate, eligible, votes, window_size=5):
+    """Return the strict majority of recent valid colors; UNKNOWN abstains."""
+    size = max(1, int(window_size))
+    if not eligible:
+        return UNKNOWN, []
+    updated = list(votes)[-size:]
+    if candidate not in CONFIRMABLE_STATES:
+        return UNKNOWN, updated
+    updated.append(candidate)
+    updated = updated[-size:]
+    if len(updated) < size:
+        return UNKNOWN, updated
+    counts = {state: updated.count(state) for state in CONFIRMABLE_STATES}
+    winner = max(counts, key=counts.get)
+    return (winner if counts[winner] > size // 2 else UNKNOWN), updated
 
 
 def fuse_traffic_light_state(class_name,yolo_confidence,hsv_state,hsv_confidence,allow_yolo_fallback=True):

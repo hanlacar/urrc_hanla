@@ -1,23 +1,23 @@
 pure_pursuit:
   ros__parameters:
     path_topic: "/perception/local_path_json"
-    # Encoder calibration: 1073.4 count/m, converted by the Arduino bridge.
+    # Encoder calibration: 533.1 count/m, converted by the Arduino bridge.
     speed_feedback_topic: "/vehicle/speed_mps"
     speed_feedback_is_rpm: false
-    # Measured wheel diameter: 0.265 m.
-    wheel_radius_m: 0.1325
+    # Measured wheel diameter: 0.30 m.
+    wheel_radius_m: 0.15
     rpm_per_wheel_rpm: 1.0
     steering_topic: "/camera/target_steering_deg"
     target_speed_topic: "/camera/target_speed_mps"
     status_topic: "/control/pure_pursuit_status_json"
     lookahead_topic: "/control/lookahead_m"
     lookahead_point_topic: "/control/lookahead_point_json"
-    # Measured axle-to-axle distance: approximately 0.73 m.
-    wheelbase_m: 0.73
-    # Camera-path verification uses a fixed 3.0 m Pure Pursuit lookahead.
-    minimum_lookahead_m: 3.0
+    # Measured front-axle to rear-axle center distance.
+    wheelbase_m: 0.78
+    # Calibrated camera-path tracking uses a fixed 1.5 m lookahead.
+    minimum_lookahead_m: 1.5
     lookahead_gain_s: 0.0
-    maximum_lookahead_m: 3.0
+    maximum_lookahead_m: 1.5
     maximum_steering_deg: 27.0
     steering_sign: 1.0
     minimum_confidence: 0.45

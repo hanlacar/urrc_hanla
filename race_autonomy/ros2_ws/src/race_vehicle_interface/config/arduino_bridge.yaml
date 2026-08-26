@@ -4,8 +4,8 @@ arduino_serial_bridge_node:
     baudrate: 115200
     encoder_topic: /inpulse
     rpm_topic: /rpm
-    # Measured over 5.0 m: 5367 counts / 5 m = 1073.4 counts/m.
-    encoder_counts_per_meter: 1073.4
+    # Measured over 10.0 m: 5331 counts / 10 m = 533.1 counts/m.
+    encoder_counts_per_meter: 533.1
     speed_mps_topic: /vehicle/speed_mps
     speed_kph_topic: /vehicle/speed_kph
     speed_valid_topic: /vehicle/speed_valid
@@ -14,7 +14,8 @@ arduino_serial_bridge_node:
     # The v14 T frame reports accumulated steering drive time, not degrees.
     steering_position_topic: /steer_position_ms
     # 2026-08-17 physical wheel alignment: visually straight, stable A0=261.
-    steering_neutral_a0: 261
+    # T870 v29 boot-time measured straight-center ADC (monitoring only).
+    steering_neutral_a0: 363
     steering_neutral_tolerance_a0: 5
     steering_a0_topic: /steer_a0
     steering_a0_error_topic: /steer_a0_error
@@ -37,7 +38,8 @@ arduino_serial_bridge_node:
     command_timeout_sec: 0.3
     # Existing v14 firmware stops after 2 s without a command. Repeat the
     # current drive command every 0.5 s to keep it alive with ample margin.
-    firmware_heartbeat_sec: 0.5
+    # v29 competition watchdog is 1.0 s; refresh at 5x margin.
+    firmware_heartbeat_sec: 0.2
     # ROS stages: -3..3. Firmware mapping: 0->1, +1..3->2..4, -1..-3->6..8.
     maximum_abs_stage: 3
     maximum_steering_deg: 27.0
@@ -52,12 +54,16 @@ arduino_serial_bridge_node:
     startup_straight_duration_sec: 0.0
     startup_straight_stage: 2
     startup_auto_center_enabled: false
+    # Generic bridge launches remain manual. Full autonomy overrides this with
+    # its auto_arm launch argument and arms once after a stable readiness gate.
+    auto_arm_when_ready: false
+    auto_arm_stable_sec: 1.0
     imu_yaw_topic: /imu_yaw
     imu_valid_topic: /imu_valid
     calibration_input_timeout_sec: 0.3
     calibration_minimum_distance_m: 0.2
     calibration_maximum_yaw_deg: 20.0
-    calibration_wheelbase_m: 0.73
+    calibration_wheelbase_m: 0.78
     # IMU +Yaw is left/CCW; this vehicle's +steering command is right.
     calibration_yaw_to_steering_sign: 1.0
     calibration_maximum_trim_deg: 5.0

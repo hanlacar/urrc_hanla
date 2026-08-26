@@ -18,10 +18,13 @@ vehicle_interface_node:
     command_rate_hz: 20.0
 
     maximum_steering_deg: 27.0
-    # Measured calibration: forward stage 3 (PWM 100) = 2.98 km/h
-    # = 0.827777... m/s. Linear command conversion: 3 / 0.827777... = 3.62416.
+    # T870 v29 measured calibration:
+    # ROS stage 1 -> firmware 2.00, PWM 50  -> 0.229 m/s
+    # ROS stage 2 -> firmware 3.00, PWM 100 -> 0.526 m/s
+    # ROS stage 3 -> firmware 4.00, PWM 150 -> not measured yet.
+    # 2 / 0.526 provides the linear fallback used by this optional adapter.
     # allow_actuation remains false, so this calibration does not unlock motion.
     maximum_abs_stage: 3
-    stage_per_mps: 3.6241610738
+    stage_per_mps: 3.8022813688
     stage_sign: 1.0
     steering_sign: 1.0

@@ -18,7 +18,7 @@ class CourseMissionNode(Node):
         super().__init__("course_mission_node")
         defaults = {
             "ramp_pitch_deg": 5.0, "ramp_delay_sec": 0.5,
-            "ramp_slow_pitch_deg": 10.0, "ramp_slow_hold_sec": 3.0,
+            "ramp_slow_pitch_deg": 5.0, "ramp_slow_hold_sec": 3.0,
             "ramp_level_pitch_deg": 3.0,
             "stop_line_trigger_distance_m": 2.0,
             "minimum_stop_sec": 2.0,
@@ -57,6 +57,7 @@ class CourseMissionNode(Node):
         self.sub(Float32, "/perception/stop_line_distance_m", "stop_distance_m", float)
         self.sub(Bool, "/perception/stop_line_distance_valid", "stop_distance_valid", bool)
         self.sub(String, "/perception/traffic_light_state", "traffic_green", lambda x: str(x).strip().upper()=="GREEN")
+        self.sub(String, "/perception/traffic_light_state", "traffic_red", lambda x: str(x).strip().upper()=="RED")
         self.sub(Bool, "/perception/traffic20_detected", "traffic20_detected", bool)
         self.sub(Bool, "/camera/path_valid", "camera_path_valid", bool)
         self.sub(Float32, "/camera/target_steering_deg", "camera_steering_deg", float)
@@ -114,6 +115,7 @@ class CourseMissionNode(Node):
             stop_detected=self.data.stop_detected and fresh("stop_detected"),
             stop_distance_valid=self.data.stop_distance_valid and fresh("stop_distance_valid", "stop_distance_m"),
             traffic_green=self.data.traffic_green and fresh("traffic_green"),
+            traffic_red=self.data.traffic_red and fresh("traffic_red"),
             traffic20_detected=self.data.traffic20_detected and fresh("traffic20_detected"),
             yellow_ahead_valid=(self.data.yellow_ahead_valid and
                                 fresh("yellow_ahead_valid", "yellow_ahead_m")),

@@ -44,7 +44,7 @@ class YoloCameraNode(Node):
         self.declare_parameter("path_top_ratio", 0.35)
         self.declare_parameter("camera_info_topic", "/camera/camera_info")
         self.declare_parameter("camera_height_m", 0.0)
-        self.declare_parameter("camera_pitch_down_deg", 0.0)
+        self.declare_parameter("camera_pitch_down_deg", 10.0)
         self.declare_parameter("camera_forward_offset_m", 0.0)
         self.declare_parameter("camera_lateral_offset_m", 0.0)
         self.declare_parameter("imu_topic", "/imu/data")

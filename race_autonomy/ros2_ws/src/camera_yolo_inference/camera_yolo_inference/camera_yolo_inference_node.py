@@ -14,7 +14,8 @@ from .class_mapper import SemanticClassMapper
 from .image_contract import LatestFrameBuffer,validate_image_contract
 from .inference_backend import UltralyticsSegmentationBackend
 from .inference_diagnostics import LatencyTracker
-from .mask_postprocessor import has_navigation_mask,validate_output_mask
+from .mask_postprocessor import (filter_lane_components,has_navigation_mask,
+                                 validate_output_mask)
 from .model_manifest import load_manifest
 from .ros_image import bgr8_to_image,image_to_bgr8,mono8_to_image
 from .stop_detection import contains_stop
@@ -25,7 +26,7 @@ class CameraYoloInferenceNode(Node):
         self.input_frame_times=deque(maxlen=240);self.output_frame_times=deque(maxlen=120)
         self.input_callbacks=MutuallyExclusiveCallbackGroup();self.inference_callbacks=MutuallyExclusiveCallbackGroup();self.visualization_callbacks=MutuallyExclusiveCallbackGroup()
         # use_sim_time is declared by rclpy itself and must not be redeclared.
-        defaults={"segmentation_model_path":"","class_manifest_path":"","device":"cpu","input_width":640,"input_height":480,"inference_fps":40.0,"detections_image_fps":30.0,"confidence_threshold":.25,"mask_threshold":.5,"max_image_age_sec":.2,"max_inference_latency_ms":40.,"input_image_topic":"/camera/image_raw","input_camera_info_topic":"/camera/camera_info","expected_image_width":640,"expected_image_height":480,"stop_detected_topic":"/perception/stop_detected","stop_confidence_threshold":.25,"traffic20_confidence_threshold":.25,"publish_diagnostics":True,"require_cuda":False}
+        defaults={"segmentation_model_path":"","class_manifest_path":"","device":"cpu","input_width":640,"input_height":480,"inference_fps":40.0,"detections_image_fps":30.0,"confidence_threshold":.25,"mask_threshold":.5,"road_confidence_threshold":.40,"lane_confidence_threshold":.60,"lane_minimum_component_area":80,"lane_maximum_horizontal_ratio":4.0,"lane_minimum_horizontal_width":80,"max_image_age_sec":.2,"max_inference_latency_ms":40.,"input_image_topic":"/camera/image_raw","input_camera_info_topic":"/camera/camera_info","expected_image_width":640,"expected_image_height":480,"stop_detected_topic":"/perception/stop_detected","stop_confidence_threshold":.25,"traffic20_confidence_threshold":.25,"publish_diagnostics":True,"require_cuda":False}
         for key,value in defaults.items():self.declare_parameter(key,value)
         output_qos=QoSProfile(history=QoSHistoryPolicy.KEEP_LAST,depth=1,reliability=QoSReliabilityPolicy.RELIABLE)
         self.mask_pubs={role:self.create_publisher(Image,f"/camera/{topic}",qos_profile_sensor_data) for role,topic in (("road","road_mask"),("white_line","white_line_mask"),("yellow_line","yellow_line_mask"))}
@@ -81,6 +82,8 @@ class CameraYoloInferenceNode(Node):
         output=cv2.addWeighted(output,.60,overlay,.40,0.)
         for instance in instances:
             class_id=int(instance["class_id"]);color=colors[class_id%len(colors)];name=names.get(class_id,str(class_id)) if isinstance(names,dict) else names[class_id]
+            if class_id in set(self.mapper.class_ids_for_role("road")) | set(self.mapper.class_ids_for_role("white_line")) | set(self.mapper.class_ids_for_role("yellow_line")):
+                continue
             box=instance.get("xyxy",());
             if len(box)!=4:continue
             x1,y1,x2,y2=(int(v) for v in box);cv2.rectangle(output,(x1,y1),(x2,y2),color,1)
@@ -115,7 +118,10 @@ class CameraYoloInferenceNode(Node):
         try:
             bgr=image_to_bgr8(image)
             role_class_ids={role:self.mapper.class_ids_for_role(role) for role in ("road","white_line","yellow_line")}
-            instances,masks=self.backend.infer_navigation(bgr,role_class_ids,self.p("mask_threshold"))
+            role_confidences={"road":self.p("road_confidence_threshold"),"white_line":self.p("lane_confidence_threshold"),"yellow_line":self.p("lane_confidence_threshold")}
+            instances,masks=self.backend.infer_navigation(bgr,role_class_ids,self.p("mask_threshold"),role_confidences)
+            for role in ("white_line","yellow_line"):
+                masks[role]=filter_lane_components(masks[role],self.p("lane_minimum_component_area"),self.p("lane_maximum_horizontal_ratio"),self.p("lane_minimum_horizontal_width"))
             self.stop_pub.publish(Bool(data=contains_stop(instances,self.backend.get_model_names(),self.p("stop_confidence_threshold"))))
             names=self.backend.get_model_names()
             def class_name(item):

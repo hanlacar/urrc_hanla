@@ -30,3 +30,20 @@ def validate_output_mask(mask,shape=(480,640),allow_empty=True):
 def has_navigation_mask(masks):
     """Accept a road area or either lane boundary as path evidence."""
     return any(np.count_nonzero(masks.get(role, ()))>0 for role in ("road","white_line","yellow_line"))
+
+def filter_lane_components(mask,minimum_area=80,maximum_horizontal_ratio=4.0,
+                           minimum_horizontal_width=80):
+    """Remove tiny blobs and wide, shallow lane false positives."""
+    binary=(np.asarray(mask)>0).astype(np.uint8)
+    count,labels,stats,_=cv2.connectedComponentsWithStats(binary,8)
+    output=np.zeros(binary.shape,np.uint8)
+    for label in range(1,count):
+        x,y,width,height,area=(int(value) for value in stats[label])
+        if area < int(minimum_area):
+            continue
+        horizontal=(width >= int(minimum_horizontal_width) and
+                    width > float(maximum_horizontal_ratio)*max(1,height))
+        if horizontal:
+            continue
+        output[labels==label]=255
+    return output

@@ -10,16 +10,22 @@ def _interp(points, xs):
     return np.interp(xs, points[order, 0], points[order, 1])
 
 
-def generate_path(left=None, right=None, road_center=None, lane_width_m=0.8, previous=None, previous_age_s=0., hold_timeout_s=.3):
+def generate_path(left=None, right=None, road_center=None, lane_width_m=0.8,
+                  previous=None, previous_age_s=0., hold_timeout_s=.3,
+                  minimum_boundary_clearance_m=0.0):
     left, right = np.asarray(left if left is not None else []).reshape(-1, 2), np.asarray(right if right is not None else []).reshape(-1, 2)
     road = np.asarray(road_center if road_center is not None else []).reshape(-1, 2)
     if len(left) >= 2 and len(right) >= 2:
         lo, hi = max(left[:,0].min(), right[:,0].min()), min(left[:,0].max(), right[:,0].max())
         xs = np.linspace(lo, hi, 30); return np.c_[xs, (_interp(left,xs)+_interp(right,xs))/2], BOTH_BOUNDARIES
+    # A single detected marking is a physical vehicle boundary, not a path to
+    # follow directly.  Never place the vehicle centre closer than half the
+    # lane width or the configured body-clearance distance.
+    offset = max(float(lane_width_m)/2, float(minimum_boundary_clearance_m))
     if len(left) >= 2:
-        return np.c_[left[:,0], left[:,1]-lane_width_m/2], LEFT_ONLY
+        return np.c_[left[:,0], left[:,1]-offset], LEFT_ONLY
     if len(right) >= 2:
-        return np.c_[right[:,0], right[:,1]+lane_width_m/2], RIGHT_ONLY
+        return np.c_[right[:,0], right[:,1]+offset], RIGHT_ONLY
     if len(road) >= 2:
         return road, ROAD_ONLY
     if previous is not None and len(previous) >= 2 and previous_age_s <= hold_timeout_s:

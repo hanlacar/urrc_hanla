@@ -9,9 +9,11 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Bool, Float32, String
 
-from .traffic_light_color import classify_traffic_light_bgr, clipped_box, fuse_traffic_light_state
+from .traffic_light_color import (classify_traffic_light_bgr, clipped_box,
+                                  fuse_traffic_light_state)
+from .traffic_light_color import update_light_vote
 
 
 class TrafficLightColorNode(Node):
@@ -25,7 +27,7 @@ class TrafficLightColorNode(Node):
             "state_topic": "/perception/traffic_light_state",
             "result_topic": "/perception/traffic_light_state_json",
             "debug_image_topic": "/perception/traffic_light_image",
-            "candidate_class_names": ["R_liht", "Y_light", "G_light", "etc_light"],
+            "candidate_class_names": ["R_light", "Y_light", "G_light", "etc_light"],
             "detection_timeout_sec": 0.3,
             "minimum_yolo_confidence": 0.25,
             "saturation_min": 90,
@@ -34,17 +36,32 @@ class TrafficLightColorNode(Node):
             "dominance_ratio": 1.35,
             "box_padding_ratio": 0.05,
             "publish_debug_image": True,
-            "allow_yolo_class_fallback": True,
+            "allow_yolo_class_fallback": False,
+            "stop_line_distance_topic": "/perception/stop_line_distance_m",
+            "stop_line_distance_valid_topic": "/perception/stop_line_distance_valid",
+            "activation_distance_m": 3.0,
+            "distance_timeout_sec": 0.35,
+            "confirmation_frames": 5,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.detections = []
         self.detection_time = None
+        self.stop_line_distance_m = None
+        self.stop_line_distance_valid = False
+        self.stop_line_distance_time = None
+        self.signal_votes = []
         self.state_pub = self.create_publisher(String, self.param("state_topic"), 10)
         self.result_pub = self.create_publisher(String, self.param("result_topic"), 10)
         self.debug_pub = self.create_publisher(Image, self.param("debug_image_topic"), 10)
         self.create_subscription(String, self.param("detections_topic"), self.on_detections, 10)
         self.create_subscription(Image, self.param("input_image_topic"), self.on_image, qos_profile_sensor_data)
+        self.create_subscription(
+            Float32, self.param("stop_line_distance_topic"),
+            self.on_stop_line_distance, 10)
+        self.create_subscription(
+            Bool, self.param("stop_line_distance_valid_topic"),
+            self.on_stop_line_distance_valid, 10)
 
     def param(self, name):
         return self.get_parameter(name).value
@@ -60,6 +77,17 @@ class TrafficLightColorNode(Node):
         except (ValueError, TypeError, json.JSONDecodeError):
             self.detections = []
             self.detection_time = None
+
+    def on_stop_line_distance(self, msg):
+        value = float(msg.data)
+        if np.isfinite(value) and value >= 0.0:
+            self.stop_line_distance_m = value
+            self.stop_line_distance_time = time.monotonic()
+
+    def on_stop_line_distance_valid(self, msg):
+        self.stop_line_distance_valid = bool(msg.data)
+        if not self.stop_line_distance_valid:
+            self.signal_votes = []
 
     def on_image(self, msg):
         frame = self.from_image_msg(msg)
@@ -99,9 +127,31 @@ class TrafficLightColorNode(Node):
             cv2.rectangle(debug, (x1, y1), (x2, y2), color, 2)
             cv2.putText(debug, f"{state} [{source}]", (x1, max(20, y1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        self.state_pub.publish(String(data=best["state"]))
+        distance_fresh = (
+            self.stop_line_distance_valid and
+            self.stop_line_distance_m is not None and
+            self.stop_line_distance_time is not None and
+            time.monotonic() - self.stop_line_distance_time <=
+            float(self.param("distance_timeout_sec")))
+        in_confirmation_zone = (
+            distance_fresh and self.stop_line_distance_m <=
+            float(self.param("activation_distance_m")))
+        confirmed_state, self.signal_votes = update_light_vote(
+            best["state"], in_confirmation_zone, self.signal_votes,
+            self.param("confirmation_frames"))
+        vote_counts = {
+            state: self.signal_votes.count(state)
+            for state in ("RED", "YELLOW", "GREEN")}
+        self.state_pub.publish(String(data=confirmed_state))
         self.result_pub.publish(String(data=json.dumps({
-            **best, "detection_fresh": fresh, "candidate_count": len(candidates),
+            **best, "raw_state": best["state"], "state": confirmed_state,
+            "detection_fresh": fresh, "candidate_count": len(candidates),
+            "stop_line_distance_m": self.stop_line_distance_m,
+            "stop_line_distance_fresh": distance_fresh,
+            "in_confirmation_zone": in_confirmation_zone,
+            "confirmation_count": len(self.signal_votes),
+            "confirmation_frames": int(self.param("confirmation_frames")),
+            "vote_counts": vote_counts,
         })))
         if bool(self.param("publish_debug_image")):
             output = self.to_image_msg(debug)

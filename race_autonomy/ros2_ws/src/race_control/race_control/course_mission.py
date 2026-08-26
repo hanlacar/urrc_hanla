@@ -33,6 +33,7 @@ class MissionInput:
     stop_distance_m: float = float("inf")
     stop_distance_valid: bool = False
     traffic_green: bool = False
+    traffic_red: bool = False
     traffic20_detected: bool = False
     gps_direction: int = STRAIGHT
     camera_path_valid: bool = False
@@ -57,7 +58,7 @@ class MissionOutput:
 class CourseMission:
     def __init__(self, ramp_pitch_deg=5.0, ramp_delay_sec=0.5,
                  stop_distance_m=2.0, minimum_stop_sec=2.0,
-                 ramp_level_pitch_deg=3.0, ramp_slow_pitch_deg=10.0,
+                 ramp_level_pitch_deg=3.0, ramp_slow_pitch_deg=5.0,
                  ramp_slow_hold_sec=3.0, green_confirm_sec=2.0,
                  actual_stop_speed_mps=0.05):
         self.ramp_pitch_deg = float(ramp_pitch_deg)
@@ -146,15 +147,18 @@ class CourseMission:
             if trigger and self.ramp_trigger_time is None:
                 self.ramp_trigger_time = data.now
                 self.ramp_crossing = True
-                if data.pitch_deg >= self.ramp_slow_pitch_deg:
-                    self.ramp_slow_start_time = data.now
             if self.ramp_crossing:
                 if abs(data.pitch_deg) <= self.ramp_level_pitch_deg:
                     if self.ramp_level_start_time is None:
                         self.ramp_level_start_time = data.now
                     if data.now-self.ramp_level_start_time < 1.0:
-                        return MissionOutput(1, 0.0, CAMERA, direction,
-                                             "RAMP:LEVEL_CONFIRM_1SEC")
+                        if not data.camera_path_valid:
+                            return self.stopped(
+                                "RAMP:LEVEL_CONFIRM_PATH_INVALID", CAMERA,
+                                direction)
+                        return MissionOutput(
+                            1, float(data.camera_steering_deg), CAMERA,
+                            direction, "RAMP:LEVEL_CONFIRM_1SEC_PATH_FOLLOW")
                     self.ramp_crossing = False
                     self.ramp_trigger_time = None
                     self.ramp_slow_start_time = None
@@ -166,20 +170,28 @@ class CourseMission:
                     return self.stopped("RAMP:ALIGN_WHEELS", CAMERA, direction)
                 else:
                     self.ramp_level_start_time = None
-                    if data.pitch_deg >= self.ramp_slow_pitch_deg:
-                        if self.ramp_slow_start_time is None:
-                            self.ramp_slow_start_time = data.now
-                    else:
-                        self.ramp_slow_start_time = None
+                    if (data.pitch_deg >= self.ramp_slow_pitch_deg and
+                            self.ramp_slow_start_time is None):
+                        self.ramp_slow_start_time = data.now
                     if (self.ramp_slow_start_time is not None and
                             data.now-self.ramp_slow_start_time >= self.ramp_slow_hold_sec):
                         self.ramp_slow_latched = True
                     if self.ramp_slow_latched:
-                        return MissionOutput(1, 0.0, CAMERA, direction,
-                                             "RAMP:PITCH_10_STRAIGHT_LATCHED")
+                        if not data.camera_path_valid:
+                            return self.stopped(
+                                "RAMP:SLOPE_PATH_INVALID", CAMERA,
+                                direction)
+                        return MissionOutput(
+                            1, float(data.camera_steering_deg), CAMERA,
+                            direction, "RAMP:SLOPE_STAGE_1_PATH_LATCHED")
                     if self.ramp_slow_start_time is not None:
-                        return MissionOutput(2, 0.0, CAMERA, direction,
-                                             "RAMP:PITCH_10_STAGE_2_HOLD")
+                        if not data.camera_path_valid:
+                            return self.stopped(
+                                "RAMP:SLOPE_PATH_INVALID", CAMERA,
+                                direction)
+                        return MissionOutput(
+                            2, float(data.camera_steering_deg), CAMERA,
+                            direction, "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC")
                     return MissionOutput(2, 0.0, CAMERA, direction,
                                          "RAMP:STRAIGHT_STAGE_2")
             if not data.camera_path_valid:
@@ -194,6 +206,9 @@ class CourseMission:
             if self.intersection_released:
                 return self.camera_output(
                     data, data.camera_steering_deg, "INTERSECTION_GO", direction)
+            if data.traffic_red:
+                self.green_confirm_start_time = None
+                return self.stopped("INTERSECTION_RED_STOP", CAMERA, direction)
             if not data.stop_detected or not data.stop_distance_valid:
                 self.green_confirm_start_time = None
                 return self.stopped(
@@ -262,8 +277,8 @@ class CourseMission:
         if section in (7, 10):
             return self.camera_output(
                 data, data.camera_steering_deg,
-                "T_COURSE:CAMERA_STANDBY" if section == 7
-                else "PARALLEL_PARK:CAMERA_STANDBY",
+                "T_COURSE:PATH_FOLLOW_PUBLISHING" if section == 7
+                else "PARALLEL_PARK:PATH_FOLLOW_PUBLISHING",
                 direction)
 
         if section == 13:

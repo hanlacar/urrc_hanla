@@ -9,9 +9,18 @@ camera_yolo_inference_node:
     detections_image_fps: 30.0
     confidence_threshold: 0.25
     mask_threshold: 0.50
+    # Navigation masks use stricter class-specific confidence gates while
+    # traffic lights and stop signs retain the detector-level 0.25 gate.
+    road_confidence_threshold: 0.40
+    lane_confidence_threshold: 0.60
+    lane_minimum_component_area: 80
+    lane_maximum_horizontal_ratio: 4.0
+    lane_minimum_horizontal_width: 80
     max_image_age_sec: 0.40
-    # Measured CPU inference is normally 74-191 ms; retain margin for jitter.
-    max_inference_latency_ms: 40.0
+    # TensorRT on the MX450 is normally near 40 ms but can exceed that during
+    # scheduling jitter.  Reject genuinely stale work without invalidating the
+    # entire perception chain on a single-frame overrun.
+    max_inference_latency_ms: 100.0
     input_image_topic: /camera/image_raw
     input_camera_info_topic: /camera/camera_info
     stop_detected_topic: /perception/stop_detected

@@ -7,7 +7,7 @@ actuator-output parameter or implementation in this stage.
 
 ## Safety and calibration status
 
-All current extrinsics are provisional: `(x,y,z)=(0.245,0.004,0.845) m` and mounting
+Current measured camera position is `(x,y,z)=(0.245,0.004,0.850) m` and mounting
 RPY `(0,-5,0) degree`. Negative mounting pitch means that the camera looks
 down under this package's documented REP-103 convention. X/Y, Roll/Yaw,
 wheelbase, steering limit, BEV bounds, lane width, and every speed/acceleration
@@ -22,7 +22,7 @@ IMU compensation does not replace the complete camera extrinsic calibration.
 |---|---:|---|---|
 | `camera_z_m` | 0.86 m (provisional lens-center estimate) | `camera_geometry.py`, `bev_transform.py` | ray/ground intersection, pixel-to-meter scale, BEV and near/far ROI |
 | `camera_x_m`, `camera_y_m` | 0, 0 m (unconfirmed) | `camera_geometry.py`, `bev_transform.py` | translate camera-ground points into `base_link` |
-| `camera_mount_pitch_deg` | -5.0° (measured) | `camera_geometry.py`, `bev_transform.py` | camera-to-base rotation, horizon, projection and homography |
+| `camera_mount_pitch_deg` | -10.0° (measured downward angle) | `camera_geometry.py`, `bev_transform.py` | camera-to-base rotation, horizon, projection and homography |
 | mount Roll/Yaw | 0°, 0° (unconfirmed) | `camera_geometry.py`, `bev_transform.py` | lateral leveling/asymmetry and camera-forward alignment |
 | IMU Pitch/Roll | runtime degree | planner diagnostics only | slope observation/future policy; deliberately excluded from ordinary BEV |
 | IMU Yaw | relative degree | `turn_path_generator.py` interface | turn progress, exit-heading assistance |

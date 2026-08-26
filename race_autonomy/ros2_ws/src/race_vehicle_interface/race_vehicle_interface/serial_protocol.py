@@ -188,3 +188,8 @@ def encode_commands(stage, steering_deg, maximum_abs_stage, maximum_steering_deg
     return encode_drive_command(stage, maximum_abs_stage) + encode_steering_command(
         steering_deg, maximum_steering_deg
     )
+
+
+def encode_emergency_brake_command():
+    """Request the T870 v29 immediate dynamic-brake pulse."""
+    return b"B\n"

@@ -16,8 +16,8 @@ yolo_camera:
     # CameraInfo supplies fx/fy/cx/cy. Measure the mounting values below.
     # Metric path publication remains locked while height/pitch are zero.
     camera_info_topic: "/camera/camera_info"
-    camera_height_m: 0.0
-    camera_pitch_down_deg: 0.0
+    camera_height_m: 0.85
+    camera_pitch_down_deg: 10.0
     camera_forward_offset_m: 0.0
     camera_lateral_offset_m: 0.0
     # Vehicle pitch from ROS REP-103 IMU orientation compensates slopes.

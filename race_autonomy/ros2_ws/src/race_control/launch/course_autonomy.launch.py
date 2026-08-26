@@ -22,6 +22,7 @@ def generate_launch_description():
     vehicle_share = get_package_share_directory("race_vehicle_interface")
     return LaunchDescription([
         DeclareLaunchArgument("use_internal_cmd_mux", default_value="false"),
+        DeclareLaunchArgument("initial_control_mode", default_value="IDLE"),
         LogInfo(msg=("13-section camera/Depth/IMU mission decision enabled. "
                      "This launch does not arm or start the Arduino bridge.")),
         include("race_control", "camera_pure_pursuit.launch.py", {"commanded_speed_mps": "0.0"}),
@@ -30,7 +31,10 @@ def generate_launch_description():
             package="race_vehicle_interface",
             executable="cmd_mux_node",
             name="cmd_mux_node",
-            parameters=[os.path.join(vehicle_share, "config", "cmd_mux.yaml")],
+            parameters=[
+                os.path.join(vehicle_share, "config", "cmd_mux.yaml"),
+                {"initial_mode": LaunchConfiguration("initial_control_mode")},
+            ],
             output="screen",
             condition=IfCondition(LaunchConfiguration("use_internal_cmd_mux")),
         ),

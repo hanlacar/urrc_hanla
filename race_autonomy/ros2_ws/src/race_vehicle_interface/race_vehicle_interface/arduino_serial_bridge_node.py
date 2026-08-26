@@ -15,6 +15,7 @@ except ImportError:
 
 from .serial_protocol import (
     encode_drive_command,
+    encode_emergency_brake_command,
     encode_steering_command,
     encoder_delta_to_distance_m,
     encoder_delta_to_speed_mps,
@@ -44,12 +45,12 @@ class ArduinoSerialBridgeNode(Node):
             "speed_kph_topic": "/vehicle/speed_kph",
             "speed_valid_topic": "/vehicle/speed_valid",
             "distance_m_topic": "/vehicle/distance_m",
-            "encoder_counts_per_meter": 1073.4,
+            "encoder_counts_per_meter": 533.1,
             "steering_topic": "/steer_angle",
             "steering_position_topic": "/steer_position_ms",
             "steering_a0_topic": "/steer_a0",
             "steering_a0_error_topic": "/steer_a0_error",
-            "steering_neutral_a0": 261,
+            "steering_neutral_a0": 363,
             "steering_neutral_tolerance_a0": 5,
             "maximum_steering_position_ms": 440.0,
             "feedback_timeout_sec": 0.35,
@@ -66,7 +67,7 @@ class ArduinoSerialBridgeNode(Node):
             "cmd_steer_topic": "/mcu_wheel",
             "command_rate_hz": 20.0,
             "command_timeout_sec": 0.3,
-            "firmware_heartbeat_sec": 0.5,
+            "firmware_heartbeat_sec": 0.2,
             "maximum_abs_stage": 0,
             "maximum_steering_deg": 27.0,
             "require_fresh_feedback": True,
@@ -75,12 +76,14 @@ class ArduinoSerialBridgeNode(Node):
             "startup_straight_duration_sec": 0.0,
             "startup_straight_stage": 2,
             "startup_auto_center_enabled": False,
+            "auto_arm_when_ready": False,
+            "auto_arm_stable_sec": 1.0,
             "imu_yaw_topic": "/imu_yaw",
             "imu_valid_topic": "/imu_valid",
             "calibration_input_timeout_sec": 0.3,
             "calibration_minimum_distance_m": 0.2,
             "calibration_maximum_yaw_deg": 20.0,
-            "calibration_wheelbase_m": 0.73,
+            "calibration_wheelbase_m": 0.78,
             "calibration_yaw_to_steering_sign": 1.0,
             "calibration_maximum_trim_deg": 5.0,
         }
@@ -110,6 +113,8 @@ class ArduinoSerialBridgeNode(Node):
         self.calibration_start_yaw = None
         self.calibration_start_encoder = None
         self.steering_trim_deg = 0.0
+        self.auto_arm_ready_since = None
+        self.auto_arm_attempted = False
 
         self.encoder_pub = self.create_publisher(
             Int64, self.param("encoder_topic"), 10
@@ -424,6 +429,7 @@ class ArduinoSerialBridgeNode(Node):
 
     def set_tx_enabled(self, request, response):
         if not request.data:
+            self.auto_arm_attempted = True
             was_enabled = self.tx_enabled
             self.tx_enabled = False
             self.startup_straight_until = None
@@ -466,6 +472,7 @@ class ArduinoSerialBridgeNode(Node):
             response.message = "refused: Arduino feedback is not fresh"
             return response
 
+        self.auto_arm_attempted = True
         self.tx_enabled = True
         self.steering_trim_deg = 0.0
         self.trim_pub.publish(Float32(data=0.0))
@@ -536,6 +543,7 @@ class ArduinoSerialBridgeNode(Node):
 
     def transmit_command(self):
         if not self.tx_enabled:
+            self.try_auto_arm()
             return
 
         now = time.monotonic()
@@ -584,6 +592,52 @@ class ArduinoSerialBridgeNode(Node):
             return
         self.write_command(stage, steer)
 
+    def try_auto_arm(self):
+        """Arm once after feedback and both commands stay ready."""
+        if (not bool(self.param("auto_arm_when_ready")) or
+                self.auto_arm_attempted):
+            return
+        now = time.monotonic()
+        timeout = float(self.param("command_timeout_sec"))
+        commands_fresh = all(
+            key in self.command_times and now-self.command_times[key] <= timeout
+            for key in ("stage", "steer")
+        )
+        ready = (
+            bool(self.param("allow_transmit")) and
+            1 <= int(self.param("maximum_abs_stage")) <= 3 and
+            commands_fresh and
+            (not bool(self.param("require_fresh_feedback")) or
+             self.feedback_is_fresh())
+        )
+        if not ready:
+            self.auto_arm_ready_since = None
+            return
+        if self.auto_arm_ready_since is None:
+            self.auto_arm_ready_since = now
+            return
+        if now-self.auto_arm_ready_since < float(self.param("auto_arm_stable_sec")):
+            return
+        self.auto_arm_attempted = True
+        self.tx_enabled = True
+        self.steering_trim_deg = 0.0
+        self.trim_pub.publish(Float32(data=0.0))
+        self.status_pub.publish(String(data="auto_armed_ready"))
+        self.get_logger().warning(
+            "AUTO-ARMED after fresh MCU feedback and drive/steer commands "
+            "were stable; automatic re-arm is disabled for this process")
+
+    def write_emergency_brake(self):
+        """Best-effort v29 brake used only while the serial link is alive."""
+        if self.serial_port is None or not self.serial_port.is_open:
+            return False
+        try:
+            self.serial_port.write(encode_emergency_brake_command())
+            self.serial_port.flush()
+            return True
+        except (OSError, serial.SerialException):
+            return False
+
     def publish_health(self):
         connected = self.serial_port is not None and self.serial_port.is_open
         timeout = float(self.param("feedback_timeout_sec"))
@@ -600,7 +654,7 @@ class ArduinoSerialBridgeNode(Node):
 
     def destroy_node(self):
         if self.tx_enabled:
-            self.write_command(0, 0.0, force=True)
+            self.write_emergency_brake()
         self.tx_enabled = False
         self.close_serial()
         return super().destroy_node()

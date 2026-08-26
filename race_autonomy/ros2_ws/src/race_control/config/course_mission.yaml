@@ -2,8 +2,9 @@ course_mission_node:
   ros__parameters:
     ramp_pitch_deg: 5.0
     ramp_delay_sec: 0.5
-    ramp_slow_pitch_deg: 10.0
-    # Hold stage 2 with centered steering for 3 s after pitch reaches 10 deg.
+    ramp_slow_pitch_deg: 5.0
+    # At 5 deg: align for 0.5 s, follow the camera path at stage 2 for 3 s,
+    # then latch stage 1 until the ramp becomes level to resist rollback.
     ramp_slow_hold_sec: 3.0
     ramp_level_pitch_deg: 3.0
     # Stop as soon as the calibrated stop-line distance reaches 2 m.

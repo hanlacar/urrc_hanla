@@ -20,7 +20,8 @@ class UltralyticsSegmentationBackend:
         if result.masks is None:return []
         masks=result.masks.data.detach().cpu().numpy();classes=result.boxes.cls.detach().cpu().numpy().astype(int);confidences=result.boxes.conf.detach().cpu().numpy();boxes=result.boxes.xyxy.detach().cpu().numpy()
         return [{"class_id":int(class_id),"confidence":float(confidence),"xyxy":[float(v) for v in box],"mask":mask} for class_id,confidence,box,mask in zip(classes,confidences,boxes,masks)]
-    def infer_navigation(self,image,role_class_ids,mask_threshold=.5):
+    def infer_navigation(self,image,role_class_ids,mask_threshold=.5,
+                         role_confidences=None):
         """Merge, resize and threshold navigation masks on GPU."""
         if self.model is None:raise RuntimeError("model not loaded")
         result=self.model.predict(source=image,imgsz=self.input_size,conf=self.confidence,device=self.device,verbose=False)[0]
@@ -33,12 +34,14 @@ class UltralyticsSegmentationBackend:
             return instances,{role:np.zeros(shape,np.uint8) for role in role_class_ids}
         mask_tensor=result.masks.data
         merged={}
+        role_confidences=role_confidences or {}
         for role,class_ids in role_class_ids.items():
             ids=tuple(int(value) for value in class_ids)
             if not ids:
                 merged[role]=np.zeros(image.shape[:2],np.uint8);continue
             selected=classes_tensor==ids[0]
             for class_id in ids[1:]:selected|=classes_tensor==class_id
+            selected&=result.boxes.conf>=float(role_confidences.get(role,self.confidence))
             if bool(selected.any()):
                 role_mask=mask_tensor[selected].amax(dim=0)
                 if tuple(role_mask.shape)!=tuple(image.shape[:2]):

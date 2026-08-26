@@ -11,11 +11,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-# Measured stage 3 speed is 2.98 km/h. The current firmware uses three
-# discrete forward stages, so the provisional linear stage-1 target is one
-# third of that measured speed. Both downstream gates still clamp to stage 1.
-STAGE_3_SPEED_KPH = 2.98
-LOW_SPEED_STAGE_1_MPS = (STAGE_3_SPEED_KPH / 3.6) / 3.0
+# T870 v29 measured forward stage 1 (firmware 2.00, PWM 50).
+LOW_SPEED_STAGE_1_MPS = 0.229
 
 
 def generate_launch_description():
