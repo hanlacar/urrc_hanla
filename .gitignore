@@ -31,6 +31,9 @@ __pycache__/
 # Logs
 *.log
 
+# Local driving videos and rosbag captures
+recordings/
+
 # Archives / backups
 *.tar.gz
 *.zip

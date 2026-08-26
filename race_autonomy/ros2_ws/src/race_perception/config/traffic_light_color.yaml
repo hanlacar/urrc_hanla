@@ -1,23 +1,20 @@
 traffic_light_color:
   ros__parameters:
-    input_image_topic: "/camera/image_raw"
     detections_topic: "/perception/detections_json"
     state_topic: "/perception/traffic_light_state"
     result_topic: "/perception/traffic_light_state_json"
-    debug_image_topic: "/perception/traffic_light_image"
     stop_line_distance_topic: "/perception/stop_line_distance_m"
     stop_line_distance_valid_topic: "/perception/stop_line_distance_valid"
     activation_distance_m: 3.0
     distance_timeout_sec: 0.35
-    confirmation_frames: 5
+    confirmation_sec: 3.0
     candidate_class_names: ["R_light", "Y_light", "G_light", "etc_light"]
-    detection_timeout_sec: 0.3
     minimum_yolo_confidence: 0.25
-    saturation_min: 90
-    value_min: 100
-    minimum_color_pixels: 20
-    dominance_ratio: 1.35
-    box_padding_ratio: 0.05
-    publish_debug_image: true
-    # YOLO supplies the signal-car box; OpenCV HSV must determine its color.
-    allow_yolo_class_fallback: false
+    # OpenCV HSV is used only for the section-13 signal car.
+    final_image_topic: "/camera/image_raw"
+    final_state_topic: "/perception/final_signal_state"
+    final_process_hz: 10.0
+    final_confirmation_sec: 0.3
+    final_roi: [0.2, 0.05, 0.8, 0.70]
+    final_minimum_blob_area: 40
+    final_dominance_ratio: 1.35

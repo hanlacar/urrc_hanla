@@ -1,60 +1,88 @@
-import cv2
 import numpy as np
 
-from race_perception.traffic_light_color import (classify_traffic_light_bgr,
-                                                 clipped_box,
-                                                 fuse_traffic_light_state,
-                                                 update_light_vote)
+from race_perception.traffic_light_color import (
+    best_labeled_light,
+    finish_signal_from_bgr,
+    state_from_class_name,
+    update_light_confirmation,
+)
 
 
-def test_color_uses_majority_of_five_valid_frames_inside_zone():
-    votes = []
-    for candidate in ("RED", "GREEN", "RED", "YELLOW"):
-        state, votes = update_light_vote(candidate, True, votes, 5)
-        assert state == "UNKNOWN"
-    state, votes = update_light_vote("RED", True, votes, 5)
+def test_opencv_finish_signal_classifies_red_and_green_lamps():
+    red=np.zeros((200,300,3),np.uint8);red[40:70,130:160]=(0,0,255)
+    green=np.zeros((200,300,3),np.uint8);green[40:70,130:160]=(0,255,0)
+    assert finish_signal_from_bgr(red)[0]=="RED"
+    assert finish_signal_from_bgr(green)[0]=="GREEN"
+
+
+def test_opencv_finish_signal_abstains_without_dominant_color():
+    image=np.zeros((200,300,3),np.uint8)
+    image[40:70,100:130]=(0,0,255)
+    image[40:70,170:200]=(0,255,0)
+    assert finish_signal_from_bgr(image)[0]=="UNKNOWN"
+
+
+def test_color_requires_three_seconds_of_matching_observations():
+    state, tracker = update_light_confirmation("RED", True, None, 10.0, 3.0)
+    assert state == "UNKNOWN"
+    state, tracker = update_light_confirmation("RED", True, tracker, 12.99, 3.0)
+    assert state == "UNKNOWN"
+    state, tracker = update_light_confirmation("RED", True, tracker, 13.0, 3.0)
     assert state == "RED"
-    assert votes == ["RED", "GREEN", "RED", "YELLOW", "RED"]
 
 
-def test_unknown_abstains_without_resetting_votes():
-    votes = ["GREEN", "RED"]
-    state, updated = update_light_vote("UNKNOWN", True, votes, 5)
+def test_unknown_pauses_without_resetting_confirmation():
+    _, tracker = update_light_confirmation("GREEN", True, None, 1.0, 3.0)
+    _, tracker = update_light_confirmation("GREEN", True, tracker, 2.0, 3.0)
+    state, tracker = update_light_confirmation("UNKNOWN", True, tracker, 5.0, 3.0)
     assert state == "UNKNOWN"
-    assert updated == votes
+    assert tracker["candidate"] == "GREEN"
+    assert tracker["accumulated_sec"] == 1.0
+    state, tracker = update_light_confirmation("GREEN", True, tracker, 7.0, 3.0)
+    assert state == "GREEN"
 
 
-def test_vote_resets_only_outside_eligible_zone():
-    state, votes = update_light_vote("GREEN", False, ["GREEN", "RED"], 5)
-    assert (state, votes) == ("UNKNOWN", [])
+def test_confirmation_resets_outside_eligible_zone():
+    tracker = {"candidate": "GREEN", "accumulated_sec": 2.0, "last_time": 3.0}
+    assert update_light_confirmation(
+        "GREEN", False, tracker, 4.0, 3.0) == ("UNKNOWN", None)
 
 
-def test_tied_or_non_majority_vote_stays_unknown():
-    votes = []
-    for candidate in ("RED", "RED", "GREEN", "GREEN", "YELLOW"):
-        state, votes = update_light_vote(candidate, True, votes, 5)
+def test_different_color_restarts_confirmation():
+    _, tracker = update_light_confirmation("RED", True, None, 1.0, 3.0)
+    _, tracker = update_light_confirmation("RED", True, tracker, 3.0, 3.0)
+    state, tracker = update_light_confirmation("YELLOW", True, tracker, 3.1, 3.0)
     assert state == "UNKNOWN"
+    assert tracker["candidate"] == "YELLOW"
+    assert tracker["accumulated_sec"] == 0.0
 
 
-def solid_hsv(hue):
-    hsv = np.full((20, 20, 3), (hue, 255, 255), dtype=np.uint8)
-    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+def test_yolo_labels_map_directly_to_signal_states():
+    assert state_from_class_name("R_light") == "RED"
+    assert state_from_class_name("Y_light") == "YELLOW"
+    assert state_from_class_name("G_light") == "GREEN"
+    assert state_from_class_name("etc_light") == "UNKNOWN"
 
 
-def test_primary_colors():
-    assert classify_traffic_light_bgr(solid_hsv(0))[0] == "RED"
-    assert classify_traffic_light_bgr(solid_hsv(28))[0] == "YELLOW"
-    assert classify_traffic_light_bgr(solid_hsv(60))[0] == "GREEN"
+def test_highest_confidence_color_label_wins():
+    detections = [
+        {"class_name": "R_light", "confidence": 0.61, "xyxy": [1, 2, 3, 4]},
+        {"class_name": "G_light", "confidence": 0.88, "xyxy": [5, 6, 7, 8]},
+    ]
+    best, count = best_labeled_light(
+        detections, ["R_light", "Y_light", "G_light", "etc_light"], 0.25)
+    assert count == 2
+    assert best["state"] == "GREEN"
+    assert best["confidence"] == 0.88
+    assert best["source"] == "yolo_label"
 
 
-def test_dark_crop_is_unknown():
-    assert classify_traffic_light_bgr(np.zeros((20, 20, 3), np.uint8))[0] == "UNKNOWN"
-
-
-def test_box_is_clipped_to_image():
-    assert clipped_box([-10, -20, 110, 120], 100, 100) == (0, 0, 100, 100)
-
-
-def test_yolo_color_fallback_and_hsv_conflict():
-    assert fuse_traffic_light_state("G_light",.8,"UNKNOWN",0.) == ("GREEN",.8,"yolo_class_fallback")
-    assert fuse_traffic_light_state("R_light",.9,"GREEN",.5) == ("UNKNOWN",0.,"conflict")
+def test_unknown_and_low_confidence_labels_do_not_override_color():
+    detections = [
+        {"class_name": "etc_light", "confidence": 0.99},
+        {"class_name": "R_light", "confidence": 0.20},
+    ]
+    best, count = best_labeled_light(
+        detections, ["R_light", "Y_light", "G_light", "etc_light"], 0.25)
+    assert count == 1
+    assert best["state"] == "UNKNOWN"

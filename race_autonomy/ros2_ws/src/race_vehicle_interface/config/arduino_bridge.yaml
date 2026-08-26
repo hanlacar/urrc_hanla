@@ -4,8 +4,8 @@ arduino_serial_bridge_node:
     baudrate: 115200
     encoder_topic: /inpulse
     rpm_topic: /rpm
-    # Measured over 10.0 m: 5331 counts / 10 m = 533.1 counts/m.
-    encoder_counts_per_meter: 533.1
+    # Calibrated encoder scale supplied by the vehicle: 543 counts/m.
+    encoder_counts_per_meter: 543.0
     speed_mps_topic: /vehicle/speed_mps
     speed_kph_topic: /vehicle/speed_kph
     speed_valid_topic: /vehicle/speed_valid

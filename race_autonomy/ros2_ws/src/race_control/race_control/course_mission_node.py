@@ -8,7 +8,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, Int8, Int32, String
 
-from .course_mission import CourseMission, MissionInput, section_after_ramp_detection
+from .course_mission import CourseMission, MissionInput
 
 
 class CourseMissionNode(Node):
@@ -20,6 +20,11 @@ class CourseMissionNode(Node):
             "ramp_pitch_deg": 5.0, "ramp_delay_sec": 0.5,
             "ramp_slow_pitch_deg": 5.0, "ramp_slow_hold_sec": 3.0,
             "ramp_level_pitch_deg": 3.0,
+            "ramp_pitch_confirm_sec": 0.3,
+            "stop_line_rearm_sec": 0.5,
+            "ramp_post_stop_drive_sec": 3.0,
+            "ramp_second_line_stop_sec": 1.0,
+            "traffic20_rearm_sec": 0.5,
             "stop_line_trigger_distance_m": 2.0,
             "minimum_stop_sec": 2.0,
             "green_confirm_sec": 2.0,
@@ -35,10 +40,16 @@ class CourseMissionNode(Node):
             self.stop_depth_threshold_m, self.p("minimum_stop_sec"),
             self.p("ramp_level_pitch_deg"), self.p("ramp_slow_pitch_deg"),
             self.p("ramp_slow_hold_sec"), self.p("green_confirm_sec"),
-            self.p("actual_stop_speed_mps"))
+            self.p("actual_stop_speed_mps"),
+            self.p("ramp_pitch_confirm_sec"),
+            self.p("stop_line_rearm_sec"),
+            self.p("ramp_post_stop_drive_sec"),
+            self.p("ramp_second_line_stop_sec"),
+            self.p("traffic20_rearm_sec"))
         self.data = MissionInput()
         self.updated = {}
-        self.ramp_section_override = False
+        self.active_section_pub = self.create_publisher(
+            Int8, "/mission/active_section", 10)
         self.camera_drive_pub = self.create_publisher(
             Float32, "/camera_drive", 10)
         self.camera_wheel_pub = self.create_publisher(
@@ -56,9 +67,12 @@ class CourseMissionNode(Node):
         self.sub(Bool, "/perception/stop_detected", "stop_detected", bool)
         self.sub(Float32, "/perception/stop_line_distance_m", "stop_distance_m", float)
         self.sub(Bool, "/perception/stop_line_distance_valid", "stop_distance_valid", bool)
-        self.sub(String, "/perception/traffic_light_state", "traffic_green", lambda x: str(x).strip().upper()=="GREEN")
-        self.sub(String, "/perception/traffic_light_state", "traffic_red", lambda x: str(x).strip().upper()=="RED")
+        self.create_subscription(
+            String, "/perception/traffic_light_state",
+            self.on_traffic_light, 10)
         self.sub(Bool, "/perception/traffic20_detected", "traffic20_detected", bool)
+        self.create_subscription(
+            String,"/perception/final_signal_state",self.on_final_signal,10)
         self.sub(Bool, "/camera/path_valid", "camera_path_valid", bool)
         self.sub(Float32, "/camera/target_steering_deg", "camera_steering_deg", float)
         self.sub(Int32, "/control/curvature_drive_stage", "planned_drive_stage", int)
@@ -80,32 +94,43 @@ class CourseMissionNode(Node):
 
     def on_section(self, msg):
         section = int(msg.data)
-        if self.ramp_section_override and section == 2:
+        if not 1 <= section <= 13:
+            self.get_logger().warning(f"Ignoring invalid GPS section: {section}")
             return
-        if section != 2:
-            self.ramp_section_override = False
+        if section != self.data.section:
+            # Never carry a signal decision from one intersection/mission
+            # into the next one. Within a section, however, UNKNOWN means
+            # "no newer decision" and the latest confirmed color is retained.
+            self.data.traffic_green=False
+            self.data.traffic_red=False
+            self.data.traffic_yellow=False
+            self.data.final_signal_green=False
+            self.data.final_signal_red=False
         self.data.section = section
         self.updated["section"] = time.monotonic()
+
+    def on_traffic_light(self, msg):
+        state = str(msg.data).strip().upper()
+        now = time.monotonic()
+        if state in {"GREEN","RED","YELLOW"}:
+            self.data.traffic_green = state == "GREEN"
+            self.data.traffic_red = state == "RED"
+            self.data.traffic_yellow = state == "YELLOW"
+        for field in ("traffic_green", "traffic_red", "traffic_yellow"):
+            self.updated[field] = now
+
+    def on_final_signal(self,msg):
+        state=str(msg.data).strip().upper();now=time.monotonic()
+        if state in {"GREEN","RED"}:
+            self.data.final_signal_green=state=="GREEN"
+            self.data.final_signal_red=state=="RED"
+        self.updated["final_signal_green"]=now
+        self.updated["final_signal_red"]=now
 
     def control(self):
         now = time.monotonic(); self.data.now = now
         timeout = float(self.p("sensor_timeout_sec"))
         fresh = lambda *fields: all(now-self.updated.get(field, -1e9) <= timeout for field in fields)
-        # Section 1 ends at the physical ramp rather than waiting for an
-        # external section publisher.  Only fresh, valid IMU data may latch
-        # this one-way 1 -> 2 transition.
-        detected_section = section_after_ramp_detection(
-            self.data.section,
-            self.data.imu_valid and fresh("imu_valid", "pitch_deg"),
-            self.data.pitch_deg,
-            self.p("ramp_pitch_deg"),
-        )
-        if detected_section != self.data.section:
-            self.data.section = detected_section
-            self.updated["section"] = now
-            self.get_logger().info(
-                f"Ramp pitch {self.data.pitch_deg:.2f} deg detected; "
-                "mission section latched 1 -> 2")
         safe = replace(
             self.data,
             camera_path_valid=self.data.camera_path_valid and fresh("camera_path_valid", "camera_steering_deg"),
@@ -116,20 +141,20 @@ class CourseMissionNode(Node):
             stop_distance_valid=self.data.stop_distance_valid and fresh("stop_distance_valid", "stop_distance_m"),
             traffic_green=self.data.traffic_green and fresh("traffic_green"),
             traffic_red=self.data.traffic_red and fresh("traffic_red"),
+            traffic_yellow=(self.data.traffic_yellow and
+                            fresh("traffic_yellow")),
             traffic20_detected=self.data.traffic20_detected and fresh("traffic20_detected"),
+            final_signal_green=(self.data.final_signal_green and
+                                fresh("final_signal_green")),
+            final_signal_red=(self.data.final_signal_red and
+                              fresh("final_signal_red")),
             yellow_ahead_valid=(self.data.yellow_ahead_valid and
                                 fresh("yellow_ahead_valid", "yellow_ahead_m")),
             speed_valid=(self.data.speed_valid and
                          fresh("speed_valid", "speed_mps")),
         )
         output = self.logic.update(safe)
-        if self.logic.section_request is not None:
-            self.data.section = int(self.logic.section_request)
-            self.ramp_section_override = self.data.section == 3
-            self.updated["section"] = now
-            self.logic.section_request = None
-            self.get_logger().info(
-                "Ramp level held for 1.0 s; active section 2 -> 3")
+        self.active_section_pub.publish(Int8(data=int(self.data.section)))
         self.camera_drive_pub.publish(Float32(data=float(output.stage)))
         self.camera_wheel_pub.publish(
             Int32(data=int(round(output.steering_deg))))

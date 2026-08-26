@@ -45,7 +45,7 @@ class ArduinoSerialBridgeNode(Node):
             "speed_kph_topic": "/vehicle/speed_kph",
             "speed_valid_topic": "/vehicle/speed_valid",
             "distance_m_topic": "/vehicle/distance_m",
-            "encoder_counts_per_meter": 533.1,
+            "encoder_counts_per_meter": 543.0,
             "steering_topic": "/steer_angle",
             "steering_position_topic": "/steer_position_ms",
             "steering_a0_topic": "/steer_a0",

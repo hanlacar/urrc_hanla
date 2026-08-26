@@ -42,8 +42,8 @@ def test_v29_measured_pwm100_speed_maps_to_ros_stage_two():
 
 
 def test_measured_encoder_distance_and_speed_calibration():
-    assert encoder_delta_to_distance_m(5331, 533.1) == pytest.approx(10.0)
-    assert encoder_delta_to_speed_mps(5331, 9.12, 533.1) == pytest.approx(
+    assert encoder_delta_to_distance_m(5430, 543.0) == pytest.approx(10.0)
+    assert encoder_delta_to_speed_mps(5430, 9.12, 543.0) == pytest.approx(
         10.0 / 9.12
     )
 

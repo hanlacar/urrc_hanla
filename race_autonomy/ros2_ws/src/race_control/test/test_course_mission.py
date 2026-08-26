@@ -1,3 +1,5 @@
+import pytest
+
 from race_control.course_mission import (
     CAMERA, CourseMission as _CourseMission, MissionInput, section_after_ramp_detection,
     traffic20_drive_stage,
@@ -42,100 +44,87 @@ def test_section_five_uses_pure_pursuit_camera_steering():
                                planned_drive_stage=2))
     assert (output.stage, output.steering_deg, output.control_mode) == (
         1, -17.4, CAMERA)
-    assert output.status == "S_CURVE:PURE_PURSUIT"
+    assert output.status == "S_CURVE:OBSTACLE_YELLOW_CORRIDOR_PATH_FOLLOW"
 
 
-def test_ramp_stops_aligns_then_drives_straight_and_reacquires_path():
-    logic = CourseMission()
-    stopped = logic.update(data(2, 10.0, imu_valid=True, pitch_deg=10.0))
-    assert (stopped.stage, stopped.steering_deg) == (0, 0.0)
-    straight = logic.update(data(2, 10.5, imu_valid=True, pitch_deg=11.0,
-                                 camera_path_valid=False))
-    assert (straight.stage, straight.steering_deg) == (0, 0.0)
-    assert straight.status == "RAMP:SLOPE_PATH_INVALID"
-    confirming = logic.update(data(2, 11.0, imu_valid=True, pitch_deg=2.5))
-    assert (confirming.stage, confirming.steering_deg) == (1, 4.0)
-    resumed = logic.update(data(2, 12.0, imu_valid=True, pitch_deg=2.5))
-    assert (resumed.stage, resumed.steering_deg) == (1, 4.0)
+def test_start_ignores_stop_lines_and_follows_path():
+    output=CourseMission().update(data(
+        1, imu_valid=True, pitch_deg=4.9, stop_detected=True,
+        stop_distance_valid=True, stop_distance_m=0.5))
+    assert (output.stage,output.steering_deg,output.status)==(1,4.0,"START")
 
 
-def test_ramp_stops_and_centers_wheels_at_exactly_five_degrees():
-    logic = CourseMission(ramp_pitch_deg=5.0)
-    output = logic.update(data(2, 1.0, imu_valid=True, pitch_deg=5.0,
-                               camera_path_valid=True, camera_steering_deg=18.0))
-    assert output.stage == 0
-    assert output.steering_deg == 0.0
-    assert output.status == "RAMP:ALIGN_WHEELS"
-    following = logic.update(data(
-        2, 1.5, imu_valid=True, pitch_deg=5.0,
-        camera_path_valid=True, camera_steering_deg=7.0))
-    assert (following.stage, following.steering_deg) == (2, 7.0)
-    assert following.status == "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC"
+def test_start_ignores_all_traffic_signs_and_lights():
+    output=CourseMission().update(data(
+        1,stop_detected=True,stop_distance_valid=True,stop_distance_m=0.5,
+        traffic_red=True,traffic_yellow=True,traffic_green=True,
+        traffic20_detected=True,camera_steering_deg=-9.0))
+    assert (output.stage,output.steering_deg,output.status)==(1,-9.0,"START")
 
 
-def test_ramp_slope_uses_stage_two_path_then_latches_stage_one_after_hold():
-    logic = CourseMission(ramp_slow_pitch_deg=10.0, ramp_slow_hold_sec=1.0)
-    logic.update(data(2, 0.0, imu_valid=True, pitch_deg=5.0))
-    before = logic.update(data(2, 0.5, imu_valid=True, pitch_deg=10.0))
-    assert (before.stage, before.steering_deg) == (2, 4.0)
-    assert before.status == "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC"
-    still_before = logic.update(data(2, 1.49, imu_valid=True, pitch_deg=10.0))
-    assert (still_before.stage, still_before.steering_deg) == (2, 4.0)
-    slowed = logic.update(data(2, 1.5, imu_valid=True, pitch_deg=10.0))
-    assert (slowed.stage, slowed.steering_deg) == (1, 4.0)
-    assert slowed.status == "RAMP:SLOPE_STAGE_1_PATH_LATCHED"
+def test_ramp_requires_stable_pitch_then_aligns_and_tracks_path():
+    logic=CourseMission(ramp_pitch_confirm_sec=0.3,ramp_delay_sec=0.5,
+                        ramp_slow_hold_sec=3.0)
+    waiting=logic.update(data(2,0.0,imu_valid=True,pitch_deg=5.0))
+    assert (waiting.stage,waiting.steering_deg)==(1,4.0)
+    aligning=logic.update(data(2,0.3,imu_valid=True,pitch_deg=5.1))
+    assert (aligning.stage,aligning.steering_deg)==(0,0.0)
+    stage_two=logic.update(data(2,0.8,imu_valid=True,pitch_deg=6.0,
+                                camera_steering_deg=7.0))
+    assert (stage_two.stage,stage_two.steering_deg)==(2,7.0)
+    assert stage_two.status=="RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC"
+    stage_one=logic.update(data(2,3.8,imu_valid=True,pitch_deg=6.0,
+                                camera_steering_deg=-4.0))
+    assert (stage_one.stage,stage_one.steering_deg)==(1,-4.0)
+    assert stage_one.status=="RAMP:SLOPE_STAGE_1_PATH_FOLLOW"
 
 
-def test_ramp_slow_straight_latches_until_level_then_reacquires_path():
-    logic = CourseMission(ramp_slow_pitch_deg=10.0, ramp_slow_hold_sec=1.0)
-    logic.update(data(2, 0.0, imu_valid=True, pitch_deg=5.0))
-    logic.update(data(2, 0.5, imu_valid=True, pitch_deg=10.0))
-    latched = logic.update(data(2, 1.5, imu_valid=True, pitch_deg=10.0,
-                                camera_steering_deg=20.0))
-    assert (latched.stage, latched.steering_deg) == (1, 20.0)
-    descending = logic.update(data(2, 2.0, imu_valid=True, pitch_deg=6.0,
-                                   camera_steering_deg=20.0))
-    assert (descending.stage, descending.steering_deg) == (1, 20.0)
-    confirming = logic.update(data(2, 2.5, imu_valid=True, pitch_deg=3.0,
-                                   camera_path_valid=True, camera_steering_deg=4.0))
-    assert (confirming.stage, confirming.steering_deg) == (1, 4.0)
-    assert confirming.status == "RAMP:LEVEL_CONFIRM_1SEC_PATH_FOLLOW"
-    level = logic.update(data(2, 3.5, imu_valid=True, pitch_deg=3.0,
-                              camera_path_valid=True, camera_steering_deg=4.0))
-    assert (level.stage, level.steering_deg) == (1, 4.0)
-    assert level.status == "RAMP:PATH_FOLLOW"
-    assert logic.section_request == 3
+def test_ramp_second_line_stops_one_second_then_runs_stage_one_three_seconds():
+    logic=CourseMission(ramp_pitch_confirm_sec=0.0,stop_line_rearm_sec=0.5)
+    first=logic.update(data(2,0.0,imu_valid=True,pitch_deg=6.0,
+                            stop_detected=True,stop_distance_valid=True,
+                            stop_distance_m=1.0))
+    assert first.status=="RAMP:ALIGN_WHEELS"
+    logic.update(data(2,0.1,imu_valid=True,pitch_deg=6.0))
+    logic.update(data(2,0.6,imu_valid=True,pitch_deg=6.0))
+    approaching=logic.update(data(
+        2,0.7,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        stop_distance_valid=True,stop_distance_m=2.1))
+    assert approaching.stage==2
+    stopped=logic.update(data(
+        2,0.8,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        stop_distance_valid=True,stop_distance_m=2.0,
+        camera_steering_deg=-6.0))
+    assert (stopped.stage,stopped.steering_deg)==(0,0.0)
+    assert stopped.status=="RAMP:SECOND_STOP_LINE_STOP_0.0SEC"
+    assert logic.update(data(
+        2,1.79,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        stop_distance_valid=True,stop_distance_m=2.0)).stage==0
+    moving=logic.update(data(
+        2,1.8,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        stop_distance_valid=True,stop_distance_m=2.0,
+        camera_steering_deg=-6.0))
+    assert (moving.stage,moving.steering_deg)==(1,-6.0)
+    assert moving.status=="RAMP:SECOND_STOP_LINE_STAGE_1_0.0SEC"
+    still_moving=logic.update(data(
+        2,4.79,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        stop_distance_valid=True,stop_distance_m=2.0,speed_valid=True,
+        speed_mps=0.2))
+    assert still_moving.stage==1
+    completed=logic.update(data(
+        2,4.8,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        stop_distance_valid=True,stop_distance_m=2.0,speed_valid=True,
+        speed_mps=0.2,camera_steering_deg=9.0))
+    assert (completed.stage,completed.steering_deg)==(2,9.0)
+    assert completed.status=="RAMP:SECOND_STOP_LINE_STAGE_2_PATH_FOLLOW"
+    assert logic.ramp_second_line_completed
 
 
-def test_ramp_stage_two_timer_survives_a_small_pitch_drop():
-    logic = CourseMission(ramp_slow_pitch_deg=10.0, ramp_slow_hold_sec=1.0)
-    logic.update(data(2, 0.0, imu_valid=True, pitch_deg=5.0))
-    logic.update(data(2, 0.5, imu_valid=True, pitch_deg=10.0))
-    logic.update(data(2, 1.0, imu_valid=True, pitch_deg=9.9))
-    assert logic.update(data(2, 1.5, imu_valid=True, pitch_deg=10.0)).stage == 1
-
-
-def test_ramp_holds_stage_two_path_for_three_seconds_then_uses_stage_one():
-    logic = CourseMission(ramp_slow_hold_sec=3.0)
-    logic.update(data(2, 10.0, imu_valid=True, pitch_deg=10.0))
-    logic.update(data(2, 10.5, imu_valid=True, pitch_deg=11.0))
-    held = logic.update(data(2, 13.49, imu_valid=True, pitch_deg=11.0,
-                             stop_detected=False, camera_path_valid=True,
-                             camera_steering_deg=-6.0))
-    assert (held.stage, held.steering_deg) == (2, -6.0)
-    assert held.status == "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC"
-    slowed = logic.update(data(2, 13.5, imu_valid=True, pitch_deg=11.0))
-    assert (slowed.stage, slowed.steering_deg) == (1, 4.0)
-    assert slowed.status == "RAMP:SLOPE_STAGE_1_PATH_LATCHED"
-
-
-def test_yellow_line_one_meter_stops_then_uses_valid_replanned_path():
-    logic = CourseMission()
-    stopped = logic.update(data(5, 1.0, yellow_ahead_valid=True, yellow_ahead_m=1.0))
-    assert stopped.stage == 0
-    assert logic.update(data(5, 1.49, yellow_ahead_valid=True, yellow_ahead_m=0.9)).stage == 0
-    resumed = logic.update(data(5, 1.5, yellow_ahead_valid=True, yellow_ahead_m=0.9))
-    assert (resumed.stage, resumed.steering_deg) == (1, 4.0)
+def test_s_curve_never_stops_merely_for_yellow_boundary():
+    output=CourseMission().update(data(
+        5,yellow_ahead_valid=True,yellow_ahead_m=0.5,
+        camera_steering_deg=-8.0))
+    assert (output.stage,output.steering_deg)==(1,-8.0)
 
 
 def intersection_data(now, **kwargs):
@@ -145,76 +134,40 @@ def intersection_data(now, **kwargs):
     return data(4, now, **values)
 
 
-def test_intersection_stops_half_meter_and_releases_on_green():
-    logic = CourseMission(minimum_stop_sec=0.5)
-    stopped = logic.update(intersection_data(1.0))
-    assert stopped.stage == 0
-    assert logic.update(intersection_data(1.4, traffic_green=True)).stage == 0
-    confirming = logic.update(intersection_data(1.5, traffic_green=True))
-    assert confirming.stage == 0
-    assert confirming.status == "INTERSECTION_CONFIRM_GREEN_0.0SEC"
-    assert logic.update(intersection_data(3.49, traffic_green=True)).stage == 0
-    assert logic.update(intersection_data(
-        3.5, traffic_green=True, gps_direction=-1)).stage == 1
-    released = logic.update(data(4, 3.6, stop_detected=False,
-                                 stop_distance_valid=False))
-    assert released.stage == 1
-    assert released.status == "INTERSECTION_GO"
+@pytest.mark.parametrize("section",(4,6,8,11))
+def test_first_two_intersections_ignore_missing_line_or_signal(section):
+    logic=CourseMission()
+    missing_signal=logic.update(data(
+        section,stop_detected=True,stop_distance_valid=True,
+        stop_distance_m=1.0))
+    assert missing_signal.stage==1
+    missing_line=logic.update(data(section,traffic_red=True))
+    assert missing_line.stage==1
 
 
-def test_intersection_green_confirmation_resets_when_signal_breaks():
-    logic = CourseMission(minimum_stop_sec=0.0, green_confirm_sec=2.0)
-    logic.update(intersection_data(1.0, traffic_green=True))
-    assert logic.update(intersection_data(2.0, traffic_green=False)).stage == 0
-    assert logic.update(intersection_data(3.0, traffic_green=True)).stage == 0
-    assert logic.update(intersection_data(4.99, traffic_green=True)).stage == 0
-    assert logic.update(intersection_data(5.0, traffic_green=True)).stage == 1
+@pytest.mark.parametrize("section",(4,6,8,11))
+@pytest.mark.parametrize("signal",("traffic_red","traffic_yellow"))
+def test_first_two_intersections_stop_for_red_or_yellow_at_two_meters(section,signal):
+    logic=CourseMission()
+    kwargs={signal:True,"stop_detected":True,"stop_distance_valid":True,
+            "stop_distance_m":2.0}
+    output=logic.update(data(section,**kwargs))
+    assert output.stage==0
+    assert output.status.endswith("STOP_AT_2M")
 
 
-def test_opencv_confirmed_red_stops_and_green_can_release_after_safety_hold():
-    logic = CourseMission(minimum_stop_sec=0.0, green_confirm_sec=0.0)
-    red = logic.update(intersection_data(
-        1.0, traffic_red=True, traffic_green=False))
-    assert red.stage == 0
-    assert red.status == "INTERSECTION_RED_STOP"
-    green = logic.update(intersection_data(
-        1.1, traffic_red=False, traffic_green=True))
-    assert green.stage == 1
-    assert green.status == "INTERSECTION_GO"
-
-
-def test_intersection_requires_stop_distance_and_actual_encoder_stop():
-    logic = CourseMission(minimum_stop_sec=0.0)
-    missing = logic.update(data(4, 1.0, stop_detected=False,
-                                stop_distance_valid=False))
-    assert missing.stage == 0
-    assert missing.status == "INTERSECTION_WAIT_STOP_LINE_DISTANCE"
-    moving = logic.update(intersection_data(2.0, speed_mps=0.2))
-    assert moving.stage == 0
-    assert moving.status == "INTERSECTION_WAIT_ACTUAL_STOP"
-
-
-def test_intersection_stops_at_two_meter_threshold():
-    logic = CourseMission(stop_distance_m=2.0, minimum_stop_sec=2.0)
-    approaching = logic.update(intersection_data(
-        1.0, stop_distance_m=2.01, speed_mps=0.2))
-    assert approaching.stage == 1
-    assert approaching.status == "INTERSECTION_APPROACH_STOP_LINE"
-    threshold = logic.update(intersection_data(
-        1.1, stop_distance_m=2.0, speed_mps=0.2))
-    assert threshold.stage == 0
-    assert threshold.status == "INTERSECTION_WAIT_ACTUAL_STOP"
-
-
-def test_invalid_camera_path_resets_green_confirmation():
-    logic = CourseMission(minimum_stop_sec=0.0, green_confirm_sec=2.0)
-    logic.update(intersection_data(1.0, traffic_green=True))
-    invalid = logic.update(intersection_data(
-        2.0, traffic_green=True, camera_path_valid=False))
-    assert invalid.stage == 0
-    assert logic.update(intersection_data(3.0, traffic_green=True)).stage == 0
-    assert logic.update(intersection_data(4.99, traffic_green=True)).stage == 0
-    assert logic.update(intersection_data(5.0, traffic_green=True)).stage == 1
+@pytest.mark.parametrize("section",(4,6,8,11))
+def test_first_two_intersections_green_goes_and_far_red_approaches(section):
+    logic=CourseMission()
+    green=logic.update(data(
+        section,traffic_green=True,stop_detected=True,
+        stop_distance_valid=True,stop_distance_m=2.0))
+    assert (green.stage,green.status)==(1,"INTERSECTION_GO")
+    far_red=logic.update(data(
+        section,traffic_red=True,stop_detected=True,
+        stop_distance_valid=True,stop_distance_m=2.1))
+    assert (far_red.stage,far_red.status)==(
+        1,"INTERSECTION_APPROACH_STOP_LINE")
 
 
 def test_parking_sections_keep_camera_candidate_for_mcu_priority():
@@ -227,7 +180,7 @@ def test_parking_sections_keep_camera_candidate_for_mcu_priority():
     assert out.status == "PARALLEL_PARK:PATH_FOLLOW_PUBLISHING"
 
 
-def test_traffic20_section_latches_cruise_stage_two_to_three():
+def test_two_traffic20_events_toggle_stage_two_to_three_and_back():
     logic = CourseMission()
     assert logic.update(data(9, traffic20_detected=False,
                              planned_drive_stage=2)).stage == 2
@@ -240,9 +193,18 @@ def test_traffic20_section_latches_cruise_stage_two_to_three():
     confirmed = logic.update(data(9, now=3.0, traffic20_detected=True,
                                   planned_drive_stage=2))
     assert confirmed.stage == 3
-    assert confirmed.status == "TRAFFIC20_CONFIRMED:STAGE_3"
-    assert logic.update(data(9, traffic20_detected=False,
-                             planned_drive_stage=2)).stage == 3
+    assert confirmed.status == "TRAFFIC20_COUNT_1:STAGE_3"
+    logic.update(data(9,now=4.0,traffic20_detected=False,
+                      planned_drive_stage=2))
+    logic.update(data(9,now=4.5,traffic20_detected=False,
+                      planned_drive_stage=2))
+    assert logic.update(data(9,now=5.0,traffic20_detected=True,
+                             planned_drive_stage=2)).stage==3
+    assert logic.update(data(9,now=6.99,traffic20_detected=True,
+                             planned_drive_stage=2)).stage==3
+    second=logic.update(data(9,now=7.0,traffic20_detected=True,
+                             planned_drive_stage=2))
+    assert (second.stage,second.status)==(2,"TRAFFIC20_COUNT_2:STAGE_2")
 
 
 def test_traffic20_confirmation_resets_if_detection_breaks_before_two_seconds():
@@ -250,6 +212,8 @@ def test_traffic20_confirmation_resets_if_detection_breaks_before_two_seconds():
     logic.update(data(9, now=1.0, traffic20_detected=True,
                       planned_drive_stage=2))
     logic.update(data(9, now=2.0, traffic20_detected=False,
+                      planned_drive_stage=2))
+    logic.update(data(9, now=2.5, traffic20_detected=False,
                       planned_drive_stage=2))
     assert logic.update(data(9, now=3.0, traffic20_detected=True,
                              planned_drive_stage=2)).stage == 2
@@ -276,8 +240,16 @@ def test_invalid_curvature_plan_safe_stops():
     assert output.status == "SAFE_STOP:SPEED_PLAN_INVALID"
 
 
-def test_finish_stop_latches_and_invalid_path_safe_stops():
+def test_finish_red_stops_at_one_meter_and_green_goes():
     logic = CourseMission()
-    assert logic.update(data(13, stop_distance_valid=True, stop_distance_m=0.49)).stage == 0
-    assert logic.update(data(13)).stage == 0
+    red=logic.update(data(
+        13,stop_detected=True,stop_distance_valid=True,stop_distance_m=1.0,
+        final_signal_red=True))
+    assert (red.stage,red.status)==(0,"FINISH_RED_STOP_AT_1M")
+    green=logic.update(data(
+        13,stop_detected=True,stop_distance_valid=True,stop_distance_m=0.5,
+        final_signal_green=True))
+    assert (green.stage,green.status)==(1,"FINISH_GREEN_GO")
+    unknown=logic.update(data(13,stop_detected=False))
+    assert unknown.stage==1
     assert logic.update(data(1, camera_path_valid=False)).stage == 0

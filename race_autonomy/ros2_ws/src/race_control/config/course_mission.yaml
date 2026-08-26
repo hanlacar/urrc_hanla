@@ -1,6 +1,8 @@
 course_mission_node:
   ros__parameters:
     ramp_pitch_deg: 5.0
+    # Require a stable incline before starting the ramp maneuver.
+    ramp_pitch_confirm_sec: 0.3
     ramp_delay_sec: 0.5
     ramp_slow_pitch_deg: 5.0
     # At 5 deg: align for 0.5 s, follow the camera path at stage 2 for 3 s,
@@ -12,7 +14,16 @@ course_mission_node:
     # Start this hold only after encoder feedback confirms an actual stop.
     minimum_stop_sec: 2.0
     actual_stop_speed_mps: 0.05
-    # Release an intersection only after uninterrupted GREEN confirmation.
-    green_confirm_sec: 2.0
+    # A line must remain absent this long before another detection is counted.
+    stop_line_rearm_sec: 0.5
+    # At the second ramp line within 2 m, drive stage 1 for this duration;
+    # after it expires, continue camera path following at stage 2.
+    ramp_post_stop_drive_sec: 3.0
+    # Stop for one second before the stage-1 departure phase.
+    ramp_second_line_stop_sec: 1.0
+    # Require this absence before the next traffic20 is a new sign event.
+    traffic20_rearm_sec: 0.5
+    # The perception node already confirms each labeled signal for 3 seconds.
+    green_confirm_sec: 0.0
     command_rate_hz: 20.0
     sensor_timeout_sec: 0.5

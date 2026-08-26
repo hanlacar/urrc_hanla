@@ -21,8 +21,13 @@ camera_path_planner_node:
     min_turn_radius_m: 1.2
     bev_forward_min_m: 0.3
     bev_forward_max_m: 6.0
-    bev_left_m: 2.0
-    bev_right_m: 2.0
+    # Symmetric lateral BEV bounds selected from the active mission section.
+    bev_normal_lateral_m: 1.2
+    bev_turn_lateral_m: 1.5
+    # Sections 3, 5 and 12 use the wider curve view.
+    bev_s_curve_lateral_m: 1.5
+    # Sections 4/6/8/11: use a narrow view, 1.0 m on each side of base_link.
+    bev_intersection_lateral_m: 1.0
     bev_resolution_m_per_pixel: 0.02
     lane_width_m: 0.8
     # Section 5: inflate road-mask holes by half vehicle width plus this margin.

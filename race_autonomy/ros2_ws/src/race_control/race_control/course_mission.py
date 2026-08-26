@@ -6,7 +6,6 @@ from dataclasses import dataclass
 LEFT, STRAIGHT, RIGHT = -1, 0, 1
 CAMERA = 1
 INTERSECTIONS = {4, 6, 8, 11}
-YELLOW_REPLAN_SECTIONS = {5}
 
 
 def section_after_ramp_detection(section, imu_valid, pitch_deg,
@@ -34,7 +33,10 @@ class MissionInput:
     stop_distance_valid: bool = False
     traffic_green: bool = False
     traffic_red: bool = False
+    traffic_yellow: bool = False
     traffic20_detected: bool = False
+    final_signal_green: bool = False
+    final_signal_red: bool = False
     gps_direction: int = STRAIGHT
     camera_path_valid: bool = False
     camera_steering_deg: float = 0.0
@@ -60,7 +62,12 @@ class CourseMission:
                  stop_distance_m=2.0, minimum_stop_sec=2.0,
                  ramp_level_pitch_deg=3.0, ramp_slow_pitch_deg=5.0,
                  ramp_slow_hold_sec=3.0, green_confirm_sec=2.0,
-                 actual_stop_speed_mps=0.05):
+                 actual_stop_speed_mps=0.05,
+                 ramp_pitch_confirm_sec=0.3,
+                 stop_line_rearm_sec=0.5,
+                 ramp_post_stop_drive_sec=3.0,
+                 ramp_second_line_stop_sec=1.0,
+                 traffic20_rearm_sec=0.5):
         self.ramp_pitch_deg = float(ramp_pitch_deg)
         self.ramp_delay_sec = float(ramp_delay_sec)
         self.stop_distance_m = float(stop_distance_m)
@@ -70,12 +77,25 @@ class CourseMission:
         self.ramp_slow_hold_sec = float(ramp_slow_hold_sec)
         self.green_confirm_sec = float(green_confirm_sec)
         self.actual_stop_speed_mps = float(actual_stop_speed_mps)
+        self.ramp_pitch_confirm_sec = float(ramp_pitch_confirm_sec)
+        self.stop_line_rearm_sec = float(stop_line_rearm_sec)
+        self.ramp_post_stop_drive_sec = float(ramp_post_stop_drive_sec)
+        self.ramp_second_line_stop_sec = float(ramp_second_line_stop_sec)
+        self.traffic20_rearm_sec = float(traffic20_rearm_sec)
         self.section = None
         self.ramp_trigger_time = None
         self.ramp_crossing = False
         self.ramp_slow_start_time = None
         self.ramp_slow_latched = False
         self.ramp_level_start_time = None
+        self.ramp_pitch_candidate_time = None
+        self.ramp_stop_line_count = 0
+        self.ramp_stop_line_visible = False
+        self.ramp_stop_line_lost_time = None
+        self.ramp_second_line_stopped = False
+        self.ramp_second_line_stop_start = None
+        self.ramp_second_line_go_start = None
+        self.ramp_second_line_completed = False
         self.section_request = None
         self.yellow_stop_time = None
         self.yellow_handled = False
@@ -85,6 +105,9 @@ class CourseMission:
         self.final_stopped = False
         self.traffic20_start_time = None
         self.traffic20_confirmed = False
+        self.traffic20_count = 0
+        self.traffic20_active = False
+        self.traffic20_absent_start = None
 
     def enter_section(self, section):
         if section == self.section:
@@ -95,6 +118,14 @@ class CourseMission:
         self.ramp_slow_start_time = None
         self.ramp_slow_latched = False
         self.ramp_level_start_time = None
+        self.ramp_pitch_candidate_time = None
+        self.ramp_stop_line_count = 0
+        self.ramp_stop_line_visible = False
+        self.ramp_stop_line_lost_time = None
+        self.ramp_second_line_stopped = False
+        self.ramp_second_line_stop_start = None
+        self.ramp_second_line_go_start = None
+        self.ramp_second_line_completed = False
         self.section_request = None
         self.yellow_stop_time = None
         self.yellow_handled = False
@@ -104,6 +135,9 @@ class CourseMission:
         self.traffic20_start_time = None
         if section == 9:
             self.traffic20_confirmed = False
+            self.traffic20_count = 0
+            self.traffic20_active = False
+            self.traffic20_absent_start = None
         if section != 13:
             self.final_stopped = False
         return True
@@ -126,125 +160,105 @@ class CourseMission:
         section = self.section
         direction = data.gps_direction if data.gps_direction in (LEFT, STRAIGHT, RIGHT) else STRAIGHT
 
-        yellow_replan_enabled = section in YELLOW_REPLAN_SECTIONS
-        if (not yellow_replan_enabled or not data.yellow_ahead_valid or
-                data.yellow_ahead_m >= 1.2):
-            self.yellow_handled = False
-        if (yellow_replan_enabled and data.yellow_ahead_valid and
-                data.yellow_ahead_m <= 1.0 and
-                not self.yellow_handled and self.yellow_stop_time is None):
-            self.yellow_stop_time = data.now
-            self.yellow_handled = True
-        if self.yellow_stop_time is not None:
-            if data.now-self.yellow_stop_time < 0.5 or not data.camera_path_valid:
-                return self.stopped("YELLOW_LINE:REPLAN_STOP", CAMERA, direction)
-            self.yellow_stop_time = None
-
         if section == 2:
             if not data.imu_valid:
                 return self.stopped("RAMP:IMU_INVALID", CAMERA, direction)
             trigger = data.pitch_deg >= self.ramp_pitch_deg
-            if trigger and self.ramp_trigger_time is None:
+            if trigger:
+                if self.ramp_pitch_candidate_time is None:
+                    self.ramp_pitch_candidate_time = data.now
+                stable_pitch = (data.now-self.ramp_pitch_candidate_time >=
+                                self.ramp_pitch_confirm_sec)
+            else:
+                self.ramp_pitch_candidate_time = None
+                stable_pitch = False
+            if stable_pitch and self.ramp_trigger_time is None:
                 self.ramp_trigger_time = data.now
                 self.ramp_crossing = True
+
+            line_visible = bool(data.stop_detected and
+                                data.stop_distance_valid)
             if self.ramp_crossing:
-                if abs(data.pitch_deg) <= self.ramp_level_pitch_deg:
-                    if self.ramp_level_start_time is None:
-                        self.ramp_level_start_time = data.now
-                    if data.now-self.ramp_level_start_time < 1.0:
+                if line_visible and not self.ramp_stop_line_visible:
+                    self.ramp_stop_line_count += 1
+                    self.ramp_stop_line_visible = True
+                    self.ramp_stop_line_lost_time = None
+                elif not line_visible and self.ramp_stop_line_visible:
+                    if self.ramp_stop_line_lost_time is None:
+                        self.ramp_stop_line_lost_time = data.now
+                    elif (data.now-self.ramp_stop_line_lost_time >=
+                          self.stop_line_rearm_sec):
+                        self.ramp_stop_line_visible = False
+                        self.ramp_stop_line_lost_time = None
+                if (self.ramp_stop_line_count >= 2 and line_visible and
+                        data.stop_distance_m <= self.stop_distance_m):
+                    self.ramp_second_line_stopped = True
+                if (self.ramp_second_line_stopped and
+                        not self.ramp_second_line_completed):
+                    if self.ramp_second_line_stop_start is None:
+                        self.ramp_second_line_stop_start=data.now
+                    stop_elapsed=data.now-self.ramp_second_line_stop_start
+                    if stop_elapsed < self.ramp_second_line_stop_sec:
+                        return self.stopped(
+                            f"RAMP:SECOND_STOP_LINE_STOP_{stop_elapsed:.1f}SEC",
+                            CAMERA,direction)
+                    if self.ramp_second_line_go_start is None:
+                        self.ramp_second_line_go_start=data.now
+                    elapsed=data.now-self.ramp_second_line_go_start
+                    if elapsed < self.ramp_post_stop_drive_sec:
                         if not data.camera_path_valid:
                             return self.stopped(
-                                "RAMP:LEVEL_CONFIRM_PATH_INVALID", CAMERA,
+                                "RAMP:SECOND_STOP_LINE_PATH_INVALID",CAMERA,
                                 direction)
                         return MissionOutput(
-                            1, float(data.camera_steering_deg), CAMERA,
-                            direction, "RAMP:LEVEL_CONFIRM_1SEC_PATH_FOLLOW")
-                    self.ramp_crossing = False
-                    self.ramp_trigger_time = None
-                    self.ramp_slow_start_time = None
-                    self.ramp_slow_latched = False
-                    self.ramp_level_start_time = None
-                    self.section_request = 3
-                elif data.now - self.ramp_trigger_time < self.ramp_delay_sec:
-                    self.ramp_level_start_time = None
+                            1,float(data.camera_steering_deg),CAMERA,direction,
+                            f"RAMP:SECOND_STOP_LINE_STAGE_1_{elapsed:.1f}SEC")
+                    self.ramp_second_line_completed=True
+                if self.ramp_second_line_completed:
+                    if not data.camera_path_valid:
+                        return self.stopped(
+                            "RAMP:SECOND_STOP_LINE_STAGE_2_PATH_INVALID",
+                            CAMERA,direction)
+                    return MissionOutput(
+                        2,float(data.camera_steering_deg),CAMERA,direction,
+                        "RAMP:SECOND_STOP_LINE_STAGE_2_PATH_FOLLOW")
+            if self.ramp_crossing:
+                elapsed=data.now-self.ramp_trigger_time
+                if elapsed < self.ramp_delay_sec:
                     return self.stopped("RAMP:ALIGN_WHEELS", CAMERA, direction)
-                else:
-                    self.ramp_level_start_time = None
-                    if (data.pitch_deg >= self.ramp_slow_pitch_deg and
-                            self.ramp_slow_start_time is None):
-                        self.ramp_slow_start_time = data.now
-                    if (self.ramp_slow_start_time is not None and
-                            data.now-self.ramp_slow_start_time >= self.ramp_slow_hold_sec):
-                        self.ramp_slow_latched = True
-                    if self.ramp_slow_latched:
-                        if not data.camera_path_valid:
-                            return self.stopped(
-                                "RAMP:SLOPE_PATH_INVALID", CAMERA,
-                                direction)
-                        return MissionOutput(
-                            1, float(data.camera_steering_deg), CAMERA,
-                            direction, "RAMP:SLOPE_STAGE_1_PATH_LATCHED")
-                    if self.ramp_slow_start_time is not None:
-                        if not data.camera_path_valid:
-                            return self.stopped(
-                                "RAMP:SLOPE_PATH_INVALID", CAMERA,
-                                direction)
-                        return MissionOutput(
-                            2, float(data.camera_steering_deg), CAMERA,
-                            direction, "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC")
-                    return MissionOutput(2, 0.0, CAMERA, direction,
-                                         "RAMP:STRAIGHT_STAGE_2")
+                if not data.camera_path_valid:
+                    return self.stopped("RAMP:SLOPE_PATH_INVALID", CAMERA,
+                                        direction)
+                if elapsed < self.ramp_delay_sec+self.ramp_slow_hold_sec:
+                    return MissionOutput(
+                        2, float(data.camera_steering_deg), CAMERA, direction,
+                        "RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC")
+                return MissionOutput(
+                    1, float(data.camera_steering_deg), CAMERA, direction,
+                    "RAMP:SLOPE_STAGE_1_PATH_FOLLOW")
             if not data.camera_path_valid:
                 return self.stopped("SAFE_STOP:CAMERA_PATH_INVALID", CAMERA, direction)
             return self.camera_output(
-                data, data.camera_steering_deg, "RAMP:PATH_FOLLOW", direction)
+                data, data.camera_steering_deg, "RAMP:WAIT_STABLE_PITCH_PATH_FOLLOW", direction)
 
         if section in INTERSECTIONS:
             if not data.camera_path_valid:
-                self.green_confirm_start_time = None
                 return self.stopped("SAFE_STOP:CAMERA_PATH_INVALID", CAMERA, direction)
-            if self.intersection_released:
+            signal_visible=(data.traffic_red or data.traffic_yellow or
+                            data.traffic_green)
+            line_visible=data.stop_detected and data.stop_distance_valid
+            if not signal_visible or not line_visible:
                 return self.camera_output(
-                    data, data.camera_steering_deg, "INTERSECTION_GO", direction)
-            if data.traffic_red:
-                self.green_confirm_start_time = None
-                return self.stopped("INTERSECTION_RED_STOP", CAMERA, direction)
-            if not data.stop_detected or not data.stop_distance_valid:
-                self.green_confirm_start_time = None
-                return self.stopped(
-                    "INTERSECTION_WAIT_STOP_LINE_DISTANCE", CAMERA, direction)
-            at_line = (data.stop_distance_valid and
-                       data.stop_distance_m <= self.stop_distance_m)
-            if not at_line:
+                    data, data.camera_steering_deg,
+                    "INTERSECTION_IGNORE_MISSING_LINE_OR_SIGNAL", direction)
+            if data.stop_distance_m > self.stop_distance_m:
                 return self.camera_output(
                     data, data.camera_steering_deg,
                     "INTERSECTION_APPROACH_STOP_LINE", direction)
-            actually_stopped = (
-                data.speed_valid and
-                abs(float(data.speed_mps)) <= self.actual_stop_speed_mps)
-            if not actually_stopped:
-                self.intersection_stop_time = None
-                self.green_confirm_start_time = None
-                return self.stopped(
-                    "INTERSECTION_WAIT_ACTUAL_STOP", CAMERA, direction)
-            if self.intersection_stop_time is None:
-                self.intersection_stop_time = data.now
-            if self.intersection_stop_time is not None and not self.intersection_released:
-                stopped_long_enough = data.now - self.intersection_stop_time >= self.minimum_stop_sec
-                if not stopped_long_enough:
-                    self.green_confirm_start_time = None
-                    return self.stopped("INTERSECTION_WAIT_GREEN", CAMERA, direction)
-                if not data.traffic_green:
-                    self.green_confirm_start_time = None
-                    return self.stopped("INTERSECTION_WAIT_GREEN", CAMERA, direction)
-                if self.green_confirm_start_time is None:
-                    self.green_confirm_start_time = data.now
-                green_elapsed = data.now - self.green_confirm_start_time
-                if green_elapsed < self.green_confirm_sec:
-                    return self.stopped(
-                        f"INTERSECTION_CONFIRM_GREEN_{green_elapsed:.1f}SEC",
-                        CAMERA, direction)
-                self.intersection_released = True
+            if data.traffic_red or data.traffic_yellow:
+                signal="RED" if data.traffic_red else "YELLOW"
+                return self.stopped(f"INTERSECTION_{signal}_STOP_AT_2M",
+                                    CAMERA,direction)
             return self.camera_output(
                 data, data.camera_steering_deg, "INTERSECTION_GO", direction)
 
@@ -253,18 +267,34 @@ class CourseMission:
 
         if section == 9:
             if data.traffic20_detected:
-                if self.traffic20_start_time is None:
+                self.traffic20_absent_start = None
+                if not self.traffic20_active:
+                    self.traffic20_active = True
                     self.traffic20_start_time = data.now
-                if data.now-self.traffic20_start_time >= 2.0:
+                    self.traffic20_confirmed = False
+                if (not self.traffic20_confirmed and
+                        data.now-self.traffic20_start_time >= 2.0):
                     self.traffic20_confirmed = True
-            elif not self.traffic20_confirmed:
-                self.traffic20_start_time = None
+                    self.traffic20_count = min(2,self.traffic20_count+1)
+            elif self.traffic20_active:
+                if self.traffic20_absent_start is None:
+                    self.traffic20_absent_start = data.now
+                elif (data.now-self.traffic20_absent_start >=
+                      self.traffic20_rearm_sec):
+                    self.traffic20_active = False
+                    self.traffic20_confirmed = False
+                    self.traffic20_start_time = None
+                    self.traffic20_absent_start = None
             if not data.speed_plan_valid:
                 return self.stopped("SAFE_STOP:SPEED_PLAN_INVALID", CAMERA, direction)
-            stage = traffic20_drive_stage(
-                data.planned_drive_stage, self.traffic20_confirmed)
-            if self.traffic20_confirmed:
-                status = f"TRAFFIC20_CONFIRMED:STAGE_{stage}"
+            safe_stage=max(0,min(2,int(data.planned_drive_stage)))
+            if safe_stage < 2:
+                stage=safe_stage
+            else:
+                stage=3 if self.traffic20_count == 1 else 2
+            if self.traffic20_count:
+                status=(f"TRAFFIC20_COUNT_{self.traffic20_count}:"
+                        f"STAGE_{stage}")
             elif self.traffic20_start_time is not None:
                 elapsed = max(0.0, data.now-self.traffic20_start_time)
                 status = f"TRAFFIC20_CONFIRMING_{elapsed:.1f}SEC:STAGE_{stage}"
@@ -282,18 +312,21 @@ class CourseMission:
                 direction)
 
         if section == 13:
-            at_line = (data.stop_distance_valid and
-                       data.stop_distance_m <= self.stop_distance_m)
-            self.final_stopped = self.final_stopped or at_line
-            if self.final_stopped:
-                return self.stopped("FINISH_STOPPED", CAMERA, direction)
+            at_line=(data.stop_detected and data.stop_distance_valid and
+                     data.stop_distance_m <= 1.0)
+            if data.final_signal_red and at_line:
+                return self.stopped("FINISH_RED_STOP_AT_1M",CAMERA,direction)
+            if data.final_signal_green:
+                return self.camera_output(
+                    data,data.camera_steering_deg,"FINISH_GREEN_GO",direction)
             return self.camera_output(
-                data, data.camera_steering_deg, "FINISH_APPROACH", direction)
+                data,data.camera_steering_deg,
+                "FINISH_IGNORE_MISSING_SIGNAL_OR_LINE",direction)
 
         if section == 5:
             return self.camera_output(
                 data, data.camera_steering_deg,
-                "S_CURVE:PURE_PURSUIT", direction)
+                "S_CURVE:OBSTACLE_YELLOW_CORRIDOR_PATH_FOLLOW", direction)
 
         names = {1: "START", 3: "CURVE_CENTERING", 12: "SHARP_CURVE"}
         return self.camera_output(

@@ -9,6 +9,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Bool, Float32, Header, Int8, String
 
 from .bev_transform import BevTransform
+from .bev_roi import lateral_extent_m
 from .boundary_extractor import extract_boundary
 from .drivable_corridor import clearance_corridor_path
 from .camera_geometry import CameraGeometry
@@ -29,7 +30,7 @@ class CameraPathPlanner(Node):
         self.imu_valid=False; self.pitch=0.; self.roll=0.; self.yaw=0.; self.turn_direction=0; self.section=1
         self.previous=None; self.previous_time=None
         self.turn_sm=TurnStateMachine(); self.turn_template=None
-        defaults={"input_mode":"external","mock_scenario":"STRAIGHT_BOTH","base_frame_id":"base_link","camera_optical_frame_id":"","camera_x_m":.245,"camera_y_m":.004,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-10.,"camera_mount_yaw_deg":0.,"vehicle_width_m":.77,"vehicle_length_m":1.30,"front_overhang_m":.26,"rear_overhang_m":.26,"mask_sync_tolerance_sec":.05,"mask_stale_timeout_sec":.2,"temporal_hold_timeout_sec":.3,"turn_progress_timeout_sec":3.,"min_turn_radius_m":1.2,"bev_forward_min_m":.3,"bev_forward_max_m":8.,"bev_left_m":2.,"bev_right_m":2.,"bev_resolution_m_per_pixel":.02,"lane_width_m":.8,"single_boundary_safety_margin_m":.15,"yellow_path_corridor_m":.25,"obstacle_safety_margin_m":.15,"obstacle_maximum_lateral_step_m":.10}
+        defaults={"input_mode":"external","mock_scenario":"STRAIGHT_BOTH","base_frame_id":"base_link","camera_optical_frame_id":"","camera_x_m":.245,"camera_y_m":.004,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-10.,"camera_mount_yaw_deg":0.,"vehicle_width_m":.77,"vehicle_length_m":1.30,"front_overhang_m":.26,"rear_overhang_m":.26,"mask_sync_tolerance_sec":.05,"mask_stale_timeout_sec":.2,"temporal_hold_timeout_sec":.3,"turn_progress_timeout_sec":3.,"min_turn_radius_m":1.2,"bev_forward_min_m":.3,"bev_forward_max_m":8.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.0,"bev_resolution_m_per_pixel":.02,"lane_width_m":.8,"single_boundary_safety_margin_m":.15,"yellow_path_corridor_m":.25,"obstacle_safety_margin_m":.15,"obstacle_maximum_lateral_step_m":.10}
         for key,value in defaults.items(): self.declare_parameter(key,value)
         self.turn_sm.progress_timeout_s=self.p("turn_progress_timeout_sec")
         self.input_mode=self.p("input_mode")
@@ -106,7 +107,13 @@ class CameraPathPlanner(Node):
             if not ok:return self.publish_invalid(f"mask_validation:{_}")
             self.last_accepted_stamp=max(m.stamp for m in metas)
             geometry=CameraGeometry(self.info.k,(self.p("camera_x_m"),self.p("camera_y_m"),self.p("camera_z_m")),(self.p("camera_mount_roll_deg"),self.p("camera_mount_pitch_deg"),self.p("camera_mount_yaw_deg")),distortion_coeffs=self.info.d,distortion_model=self.info.distortion_model or "plumb_bob")
-            bev=BevTransform(geometry,self.p("bev_forward_min_m"),self.p("bev_forward_max_m"),self.p("bev_left_m"),self.p("bev_right_m"),self.p("bev_resolution_m_per_pixel"))
+            lateral_extent=lateral_extent_m(
+                self.section, self.turn_direction,
+                self.p("bev_normal_lateral_m"),
+                self.p("bev_turn_lateral_m"),
+                self.p("bev_s_curve_lateral_m"),
+                self.p("bev_intersection_lateral_m"))
+            bev=BevTransform(geometry,self.p("bev_forward_min_m"),self.p("bev_forward_max_m"),lateral_extent,lateral_extent,self.p("bev_resolution_m_per_pixel"))
             road,white,yellow=(bev.warp(self.masks[key]) for key in ("road","white","yellow"))
             if any(mask is None for mask in (road,white,yellow)):return self.publish_invalid("bev_warp_failed")
             left,right=extract_boundary(yellow,bev),extract_boundary(white,bev)
@@ -135,7 +142,7 @@ class CameraPathPlanner(Node):
             state=self.turn_sm.update(self.turn_direction,self.yaw,self.imu_valid,intersection=intersection,exit_visible=lane_visible,lane_visible=lane_visible,now=self.now())
             if state in (TurnState.TURN_ENTER,TurnState.TURN_EXECUTE,TurnState.EXIT_SEARCH):
                 candidate=bezier_turn(self.turn_direction,min_turn_radius_m=self.p("min_turn_radius_m"))
-                in_bounds=path_inside_bounds(candidate,0.,self.p("bev_forward_max_m"),self.p("bev_left_m"),self.p("bev_right_m"))
+                in_bounds=path_inside_bounds(candidate,0.,self.p("bev_forward_max_m"),lateral_extent,lateral_extent)
                 inside_road=[]
                 for x,y in candidate:
                     if x < self.p("bev_forward_min_m"):continue

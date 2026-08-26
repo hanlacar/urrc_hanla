@@ -22,7 +22,7 @@ from .stop_detection import contains_stop
 
 class CameraYoloInferenceNode(Node):
     def __init__(self,backend=None):
-        super().__init__("camera_yolo_inference_node");self.frames=LatestFrameBuffer();self.camera_info=None;self.busy=False;self.latencies=LatencyTracker();self.ready=False;self.failure="not_initialized";self.latest_visualization=None;self.last_visualized_stamp=None
+        super().__init__("camera_yolo_inference_node");self.frames=LatestFrameBuffer();self.camera_info=None;self.busy=False;self.latencies=LatencyTracker();self.ready=False;self.failure="not_initialized";self.latest_visualization=None;self.last_visualized_stamp=None;self.cached_visualization_msg=None
         self.input_frame_times=deque(maxlen=240);self.output_frame_times=deque(maxlen=120)
         self.input_callbacks=MutuallyExclusiveCallbackGroup();self.inference_callbacks=MutuallyExclusiveCallbackGroup();self.visualization_callbacks=MutuallyExclusiveCallbackGroup()
         # use_sim_time is declared by rclpy itself and must not be redeclared.
@@ -30,7 +30,8 @@ class CameraYoloInferenceNode(Node):
         for key,value in defaults.items():self.declare_parameter(key,value)
         output_qos=QoSProfile(history=QoSHistoryPolicy.KEEP_LAST,depth=1,reliability=QoSReliabilityPolicy.RELIABLE)
         self.mask_pubs={role:self.create_publisher(Image,f"/camera/{topic}",qos_profile_sensor_data) for role,topic in (("road","road_mask"),("white_line","white_line_mask"),("yellow_line","yellow_line_mask"))}
-        self.detections_image_pub=self.create_publisher(Image,"/perception/detections_image",output_qos)
+        # Debug video must never back-pressure inference when RQT is slow.
+        self.detections_image_pub=self.create_publisher(Image,"/perception/detections_image",qos_profile_sensor_data)
         self.detections_pub=self.create_publisher(String,"/perception/detections_json",output_qos)
         self.stop_pub=self.create_publisher(Bool,self.p("stop_detected_topic"),output_qos)
         self.traffic20_pub=self.create_publisher(Bool,"/perception/traffic20_detected",output_qos)
@@ -40,19 +41,28 @@ class CameraYoloInferenceNode(Node):
         try:
             manifest=load_manifest(self.p("class_manifest_path"));self.mapper=SemanticClassMapper(manifest)
             input_shape=(int(self.p("input_height")),int(self.p("input_width")))
-            self.backend=backend or UltralyticsSegmentationBackend(self.p("segmentation_model_path"),self.p("device"),input_shape,self.p("confidence_threshold"),self.p("require_cuda"));self.backend.load_model();self.mapper.resolve_model_classes(self.backend.get_model_names());self.backend.warmup();self.ready=True;self.failure="ok"
+            self.backend=backend or UltralyticsSegmentationBackend(self.p("segmentation_model_path"),self.p("device"),input_shape,self.p("confidence_threshold"),self.p("require_cuda"));self.backend.load_model();self.backend.warmup();self.model_names=self.backend.get_model_names();self.mapper.resolve_model_classes(self.model_names)
+            self.role_class_ids={role:self.mapper.class_ids_for_role(role) for role in ("road","white_line","yellow_line")}
+            self.navigation_class_ids=set().union(*map(set,self.role_class_ids.values()))
+            self.ready=True;self.failure="ok"
         except Exception as error:self.failure=f"initialization_failed: {error}"
         inference_fps=max(1.0,float(self.p("inference_fps")))
         self.inference_period=1.0/inference_fps
         self.last_inference_time=-float("inf")
         self.last_detections_image_time=-float("inf")
-        # A 5 ms polling timer quantizes a 16.67 ms target period to roughly
-        # 20 ms (50 Hz). Poll at 1 ms so a 60 Hz camera frame is handled with
-        # negligible scheduler delay while LatestFrameBuffer still drops lag.
-        self.create_timer(.001,self.process_latest,callback_group=self.inference_callbacks)
+        # 5 ms divides the 25 ms / 40 Hz inference period exactly and avoids
+        # waking Python 1000 times per second while waiting for a new frame.
+        poll_period=min(.005,self.inference_period/4.0)
+        self.create_timer(poll_period,self.process_latest,callback_group=self.inference_callbacks)
         self.create_timer(1.,self.publish_health,callback_group=self.input_callbacks)
         visualization_fps=float(self.p("detections_image_fps"))
-        if visualization_fps>0.0:self.create_timer(1.0/visualization_fps,self.publish_latest_visualization,callback_group=self.visualization_callbacks)
+        if visualization_fps>0.0:
+            self.visualization_period=1.0/visualization_fps
+            # A timer running exactly at 30 Hz permanently loses a cycle when
+            # inference owns the Python thread at its deadline. Poll cheaply
+            # and apply the 30 Hz limit ourselves so the next available slot
+            # is used instead of waiting another complete display period.
+            self.create_timer(min(.005,self.visualization_period/4.0),self.publish_latest_visualization,callback_group=self.visualization_callbacks)
     def p(self,name):return self.get_parameter(name).value
     def on_image(self,image):
         self.input_frame_times.append(time.monotonic());self.frames.push(image)
@@ -75,14 +85,15 @@ class CameraYoloInferenceNode(Node):
             for publisher in self.mask_pubs.values():
                 publisher.publish(mono8_to_image(zero,image.header))
     def render_detections(self,bgr,instances,masks):
-        output=bgr.copy();overlay=bgr.copy();names=self.backend.get_model_names()
+        output=bgr.copy();names=self.model_names
         colors=((0,180,0),(255,255,255),(0,220,255),(0,0,255),(0,255,255),(0,255,0),(255,128,0),(255,0,255),(0,128,255),(255,0,0),(128,255,255),(180,180,180))
         role_colors={"road":(0,180,0),"white_line":(255,255,255),"yellow_line":(0,220,255)}
-        for role,mask in masks.items():overlay[mask>0]=role_colors[role]
-        output=cv2.addWeighted(output,.60,overlay,.40,0.)
+        for role,mask in masks.items():
+            selected=mask>0
+            if np.any(selected):output[selected]=role_colors[role]
         for instance in instances:
             class_id=int(instance["class_id"]);color=colors[class_id%len(colors)];name=names.get(class_id,str(class_id)) if isinstance(names,dict) else names[class_id]
-            if class_id in set(self.mapper.class_ids_for_role("road")) | set(self.mapper.class_ids_for_role("white_line")) | set(self.mapper.class_ids_for_role("yellow_line")):
+            if class_id in self.navigation_class_ids:
                 continue
             box=instance.get("xyxy",());
             if len(box)!=4:continue
@@ -93,17 +104,26 @@ class CameraYoloInferenceNode(Node):
         cv2.putText(output,fps_text,(12,28),cv2.FONT_HERSHEY_SIMPLEX,.58,(0,255,0),2,cv2.LINE_AA)
         return output
     def publish_detections(self,instances,image):
-        names=self.backend.get_model_names();detections=[]
+        names=self.model_names;detections=[]
         for item in instances:
             class_id=int(item["class_id"]);name=names.get(class_id,str(class_id)) if isinstance(names,dict) else names[class_id]
             detections.append({"class_id":class_id,"class_name":str(name),"confidence":round(float(item.get("confidence",0.)),4),"xyxy":[round(float(v),1) for v in item.get("xyxy",[])]})
         self.detections_pub.publish(String(data=json.dumps({"stamp":{"sec":image.header.stamp.sec,"nanosec":image.header.stamp.nanosec},"frame_id":image.header.frame_id,"detections":detections})))
     def publish_latest_visualization(self):
+        now=time.monotonic()
+        if now-self.last_detections_image_time<self.visualization_period:return
         item=self.latest_visualization
         if item is None:return
         bgr,instances,masks,header=item;stamp=(header.stamp.sec,header.stamp.nanosec)
-        if stamp==self.last_visualized_stamp:return
-        self.detections_image_pub.publish(bgr8_to_image(self.render_detections(bgr,instances,masks),header));self.last_visualized_stamp=stamp
+        if stamp!=self.last_visualized_stamp:
+            self.cached_visualization_msg=bgr8_to_image(self.render_detections(bgr,instances,masks),header)
+            self.last_visualized_stamp=stamp
+        # Publish the latest rendered frame at the configured display cadence.
+        # Repeating a frame is intentional when inference is below 30 Hz; the
+        # true perception rate remains available on /camera/output_fps.
+        if self.cached_visualization_msg is not None:
+            self.detections_image_pub.publish(self.cached_visualization_msg)
+            self.last_detections_image_time=now
     def process_latest(self):
         if self.busy:return
         inference_now=time.monotonic()
@@ -117,33 +137,34 @@ class CameraYoloInferenceNode(Node):
         self.busy=True;started=time.perf_counter()
         try:
             bgr=image_to_bgr8(image)
-            role_class_ids={role:self.mapper.class_ids_for_role(role) for role in ("road","white_line","yellow_line")}
             role_confidences={"road":self.p("road_confidence_threshold"),"white_line":self.p("lane_confidence_threshold"),"yellow_line":self.p("lane_confidence_threshold")}
-            instances,masks=self.backend.infer_navigation(bgr,role_class_ids,self.p("mask_threshold"),role_confidences)
+            instances,masks=self.backend.infer_navigation(bgr,self.role_class_ids,self.p("mask_threshold"),role_confidences)
             for role in ("white_line","yellow_line"):
                 masks[role]=filter_lane_components(masks[role],self.p("lane_minimum_component_area"),self.p("lane_maximum_horizontal_ratio"),self.p("lane_minimum_horizontal_width"))
-            self.stop_pub.publish(Bool(data=contains_stop(instances,self.backend.get_model_names(),self.p("stop_confidence_threshold"))))
-            names=self.backend.get_model_names()
+            self.stop_pub.publish(Bool(data=contains_stop(instances,self.model_names,self.p("stop_confidence_threshold"))))
+            names=self.model_names
             def class_name(item):
                 class_id=int(item["class_id"])
                 return str(names.get(class_id,class_id) if isinstance(names,dict) else names[class_id]).strip().lower().replace("_","").replace("-","")
             traffic20=any(class_name(item) in {"traffic20","speed20"} and float(item.get("confidence",0.0))>=self.p("traffic20_confidence_threshold") for item in instances)
             self.traffic20_pub.publish(Bool(data=traffic20))
             self.publish_detections(instances,image)
+            latency=(time.perf_counter()-started)*1000.;self.latencies.add(latency)
+            self.latency_pub.publish(Float32(data=float(latency)))
+            # RQT is diagnostic output, not a driving-validity signal.  Keep
+            # it live even when this frame contains no usable navigation mask;
+            # perception_valid and the zero masks below still force a safe stop.
+            self.output_frame_times.append(time.monotonic())
+            self.latest_visualization=(bgr,instances,masks,image.header)
             for role in ("road","white_line","yellow_line"):
                 if not validate_output_mask(masks[role],(image.height,image.width),allow_empty=True):raise ValueError(f"invalid_{role}_mask")
             if not has_navigation_mask(masks):raise ValueError("empty_navigation_masks: road/white_line/yellow_line all absent")
-            latency=(time.perf_counter()-started)*1000.;self.latencies.add(latency)
             stamp_age=self.get_clock().now().nanoseconds*1e-9-(image.header.stamp.sec+image.header.stamp.nanosec*1e-9)
             if latency>self.p("max_inference_latency_ms"):raise ValueError("inference_latency_limit")
             if stamp_age>self.p("max_image_age_sec"):raise ValueError("image_age_limit")
             for role,publisher in self.mask_pubs.items():
                 publisher.publish(mono8_to_image(masks[role],image.header))
-            self.output_frame_times.append(time.monotonic())
-            self.valid_pub.publish(Bool(data=True));self.latency_pub.publish(Float32(data=float(latency)));self.publish_status("ok")
-            # RQT rendering runs in an independent callback group and consumes
-            # only the latest result, so it cannot throttle perception.
-            self.latest_visualization=(bgr,instances,masks,image.header)
+            self.valid_pub.publish(Bool(data=True));self.publish_status("ok")
         except Exception as error:self.publish_invalid(image,f"inference_failed: {error}")
         finally:self.busy=False
 
