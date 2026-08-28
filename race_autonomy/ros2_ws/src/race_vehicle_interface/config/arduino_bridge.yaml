@@ -63,7 +63,7 @@ arduino_serial_bridge_node:
     calibration_input_timeout_sec: 0.3
     calibration_minimum_distance_m: 0.2
     calibration_maximum_yaw_deg: 20.0
-    calibration_wheelbase_m: 0.78
+    calibration_wheelbase_m: 0.77
     # IMU +Yaw is left/CCW; this vehicle's +steering command is right.
     calibration_yaw_to_steering_sign: 1.0
     calibration_maximum_trim_deg: 5.0

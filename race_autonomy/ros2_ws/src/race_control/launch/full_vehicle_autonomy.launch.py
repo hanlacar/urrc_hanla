@@ -61,7 +61,7 @@ def generate_launch_description():
         DeclareLaunchArgument("auto_arm", default_value="true"),
         LogInfo(msg=(
             "FULL VEHICLE AUTONOMY: camera/Depth/YOLO, IMU, metric path, "
-            "Pure Pursuit, 13-section decision, encoder feedback and MCU bridge. "
+            "Pure Pursuit, 11-section decision, encoder feedback and MCU bridge. "
             "Arduino command TX auto-arms into normal perception/path control; "
             "the failing startup straight auto-center routine is disabled."
         )),

@@ -1,6 +1,21 @@
 import cv2
 import numpy as np
 
+
+def exclude_navigation_image_bottom(masks, exclusion_ratio):
+    """Raise the navigation ROI bottom edge above a fixed hood area."""
+    ratio = float(exclusion_ratio)
+    if not 0.0 <= ratio < 1.0:
+        raise ValueError("navigation bottom exclusion ratio must be in [0,1)")
+    result = {name: np.asarray(mask).copy() for name, mask in masks.items()}
+    for mask in result.values():
+        if mask.ndim != 2:
+            raise ValueError("navigation mask must be mono")
+        if ratio > 0.0:
+            cutoff = int(round(mask.shape[0] * (1.0-ratio)))
+            mask[max(0, min(mask.shape[0], cutoff)):, :] = 0
+    return result
+
 def remove_letterbox_padding(mask,raw_shape):
     mask=np.asarray(mask,dtype=np.float32);raw_h,raw_w=raw_shape
     if mask.shape==(raw_h,raw_w):return mask
@@ -30,6 +45,20 @@ def validate_output_mask(mask,shape=(480,640),allow_empty=True):
 def has_navigation_mask(masks):
     """Accept a road area or either lane boundary as path evidence."""
     return any(np.count_nonzero(masks.get(role, ()))>0 for role in ("road","white_line","yellow_line"))
+
+def restore_road_surface_words(road_mask, words_mask, proximity_pixels=20):
+    """Fill road-painted word regions without turning remote text into road."""
+    road=(np.asarray(road_mask)>0).astype(np.uint8)
+    words=(np.asarray(words_mask)>0).astype(np.uint8)
+    if road.shape != words.shape or road.ndim != 2:
+        raise ValueError("road and words masks must be same-size mono images")
+    radius=max(0,int(proximity_pixels))
+    if radius == 0 or not np.any(road) or not np.any(words):
+        return (road*255).astype(np.uint8)
+    size=2*radius+1
+    nearby=cv2.dilate(road,np.ones((size,size),np.uint8),iterations=1)>0
+    restored=np.logical_or(road>0,np.logical_and(words>0,nearby))
+    return np.where(restored,255,0).astype(np.uint8)
 
 def filter_lane_components(mask,minimum_area=80,maximum_horizontal_ratio=4.0,
                            minimum_horizontal_width=80):

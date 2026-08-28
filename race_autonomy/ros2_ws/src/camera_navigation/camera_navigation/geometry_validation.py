@@ -47,7 +47,7 @@ def pitch_diagnostics(pitches=(-5.,-10.,-15.)):
     return {"convention":"active vector rotation; v_base = R_mount @ R_optical_to_base @ v_optical","negative_pitch_points_down":bool(consistent and output[1]["base_z"]<0),"samples":output}
 
 
-def pitch_projection_diagnostics(k, pixel=(320.,400.), camera_height=.85, pitches=(-5.,-10.,-15.), distortion_coeffs=None, distortion_model="plumb_bob"):
+def pitch_projection_diagnostics(k, pixel=(320.,400.), camera_height=.96, pitches=(-5.,-10.,-15.), distortion_coeffs=None, distortion_model="plumb_bob"):
     samples=[]
     for pitch in pitches:
         point=CameraGeometry(k,(0.,0.,camera_height),(0.,pitch,0.),distortion_coeffs=distortion_coeffs,distortion_model=distortion_model).pixel_to_ground(*pixel)
@@ -68,7 +68,7 @@ def _empty_point(point, reason):
     return {"name":point.get("name","unnamed"),"measured":False,"valid":False,"invalid_reason":reason}
 
 
-def evaluate_reference_points(info, reference, camera_xyz=(0.,0.,.845), mount_rpy=(0.,-10.,0.), tolerances=None):
+def evaluate_reference_points(info, reference, camera_xyz=(.38,0.,.96), mount_rpy=(0.,-5.,0.), tolerances=None):
     tolerances={**DEFAULT_TOLERANCES,**(tolerances or {})}; geometry=CameraGeometry(info["k"],camera_xyz,mount_rpy,distortion_coeffs=info.get("d"),distortion_model=info.get("distortion_model",""))
     results=[]; direction_failure=False; exceeded=0; measured=0
     for point in reference.get("points",[]):

@@ -23,7 +23,7 @@ def test_valid_five_degree_pitch_transitions_start_to_ramp_only():
 
 def test_non_ramp_camera_sections_are_limited_to_stage_one():
     logic = CourseMission()
-    for section in (1, 3, 5, 12):
+    for section in (1, 3, 5):
         out = logic.update(data(section))
         assert (out.stage, out.steering_deg, out.control_mode) == (1, 4.0, CAMERA)
 
@@ -134,7 +134,7 @@ def intersection_data(now, **kwargs):
     return data(4, now, **values)
 
 
-@pytest.mark.parametrize("section",(4,6,8,11))
+@pytest.mark.parametrize("section",(4,6,8))
 def test_first_two_intersections_ignore_missing_line_or_signal(section):
     logic=CourseMission()
     missing_signal=logic.update(data(
@@ -145,7 +145,7 @@ def test_first_two_intersections_ignore_missing_line_or_signal(section):
     assert missing_line.stage==1
 
 
-@pytest.mark.parametrize("section",(4,6,8,11))
+@pytest.mark.parametrize("section",(4,6,8))
 @pytest.mark.parametrize("signal",("traffic_red","traffic_yellow"))
 def test_first_two_intersections_stop_for_red_or_yellow_at_two_meters(section,signal):
     logic=CourseMission()
@@ -156,7 +156,7 @@ def test_first_two_intersections_stop_for_red_or_yellow_at_two_meters(section,si
     assert output.status.endswith("STOP_AT_2M")
 
 
-@pytest.mark.parametrize("section",(4,6,8,11))
+@pytest.mark.parametrize("section",(4,6,8))
 def test_first_two_intersections_green_goes_and_far_red_approaches(section):
     logic=CourseMission()
     green=logic.update(data(
@@ -243,13 +243,13 @@ def test_invalid_curvature_plan_safe_stops():
 def test_finish_red_stops_at_one_meter_and_green_goes():
     logic = CourseMission()
     red=logic.update(data(
-        13,stop_detected=True,stop_distance_valid=True,stop_distance_m=1.0,
+        11,stop_detected=True,stop_distance_valid=True,stop_distance_m=1.0,
         final_signal_red=True))
     assert (red.stage,red.status)==(0,"FINISH_RED_STOP_AT_1M")
     green=logic.update(data(
-        13,stop_detected=True,stop_distance_valid=True,stop_distance_m=0.5,
+        11,stop_detected=True,stop_distance_valid=True,stop_distance_m=0.5,
         final_signal_green=True))
     assert (green.stage,green.status)==(1,"FINISH_GREEN_GO")
-    unknown=logic.update(data(13,stop_detected=False))
+    unknown=logic.update(data(11,stop_detected=False))
     assert unknown.stage==1
     assert logic.update(data(1, camera_path_valid=False)).stage == 0

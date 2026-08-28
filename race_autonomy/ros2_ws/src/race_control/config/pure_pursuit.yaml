@@ -13,7 +13,7 @@ pure_pursuit:
     lookahead_topic: "/control/lookahead_m"
     lookahead_point_topic: "/control/lookahead_point_json"
     # Measured front-axle to rear-axle center distance.
-    wheelbase_m: 0.78
+    wheelbase_m: 0.77
     # Calibrated camera-path tracking uses a fixed 1.5 m lookahead.
     minimum_lookahead_m: 1.5
     lookahead_gain_s: 0.0

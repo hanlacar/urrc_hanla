@@ -1,4 +1,6 @@
 """Synchronized camera masks to metric base_link Path ROS adapter."""
+import time
+import cv2
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseStamped
@@ -14,8 +16,14 @@ from .boundary_extractor import extract_boundary
 from .drivable_corridor import clearance_corridor_path
 from .camera_geometry import CameraGeometry
 from .mock_scenario_generator import SCENARIOS, MASK_TOPICS, external_mask_topics, make_masks
-from .path_generator import INVALID, LANE_REACQUIRE, OBSTACLE_CORRIDOR, TURN_TEMPLATE, blend_reacquire, generate_path, path_inside_bounds
+from .path_generator import (BOTH_BOUNDARIES, INVALID, LANE_REACQUIRE,
+                             LEFT_ONLY, OBSTACLE_CORRIDOR, RIGHT_ONLY,
+                             ROAD_ONLY, TEMPORAL_HOLD, TURN_TEMPLATE,
+                             blend_reacquire, generate_path,
+                             path_inside_bounds)
 from .path_validator import MaskMeta, validate_mask_set, validate_path
+from .path_filter import stabilize_path
+from .road_center_extractor import connected_road_center
 from .turn_path_generator import TurnState, TurnStateMachine, bezier_turn
 from .ros_image import image_to_mono8
 
@@ -29,8 +37,9 @@ class CameraPathPlanner(Node):
         self.masks={}; self.mask_meta={}; self.pending_mask_sets={}; self.latest_mask_stamp_key=None; self.last_accepted_stamp=None; self.perception=False
         self.imu_valid=False; self.pitch=0.; self.roll=0.; self.yaw=0.; self.turn_direction=0; self.section=1
         self.previous=None; self.previous_time=None
+        self.last_lane_path=None; self.last_lane_path_time=None
         self.turn_sm=TurnStateMachine(); self.turn_template=None
-        defaults={"input_mode":"external","mock_scenario":"STRAIGHT_BOTH","base_frame_id":"base_link","camera_optical_frame_id":"","camera_x_m":.245,"camera_y_m":.004,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-10.,"camera_mount_yaw_deg":0.,"vehicle_width_m":.77,"vehicle_length_m":1.30,"front_overhang_m":.26,"rear_overhang_m":.26,"mask_sync_tolerance_sec":.05,"mask_stale_timeout_sec":.2,"temporal_hold_timeout_sec":.3,"turn_progress_timeout_sec":3.,"min_turn_radius_m":1.2,"bev_forward_min_m":.3,"bev_forward_max_m":8.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.0,"bev_resolution_m_per_pixel":.02,"lane_width_m":.8,"single_boundary_safety_margin_m":.15,"yellow_path_corridor_m":.25,"obstacle_safety_margin_m":.15,"obstacle_maximum_lateral_step_m":.10}
+        defaults={"input_mode":"external","mock_scenario":"STRAIGHT_BOTH","base_frame_id":"base_link","camera_optical_frame_id":"","camera_x_m":.245,"camera_y_m":0.,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.,"vehicle_width_m":.77,"vehicle_length_m":1.30,"front_overhang_m":.26,"rear_overhang_m":.26,"mask_sync_tolerance_sec":.05,"mask_stale_timeout_sec":.2,"temporal_hold_timeout_sec":.3,"lane_mode_hold_timeout_sec":2.,"turn_progress_timeout_sec":3.,"min_turn_radius_m":1.2,"bev_forward_min_m":.3,"bev_forward_max_m":8.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.0,"bev_resolution_m_per_pixel":.02,"lane_width_m":.8,"single_boundary_safety_margin_m":.15,"yellow_path_corridor_m":.25,"obstacle_safety_margin_m":.15,"obstacle_maximum_lateral_step_m":.10,"road_mask_close_kernel_pixels":11,"path_spatial_filter_window":7,"path_new_frame_weight":.2,"path_maximum_frame_shift_m":.04,"debug_image_fps":10.0}
         for key,value in defaults.items(): self.declare_parameter(key,value)
         self.turn_sm.progress_timeout_s=self.p("turn_progress_timeout_sec")
         self.input_mode=self.p("input_mode")
@@ -52,6 +61,9 @@ class CameraPathPlanner(Node):
         self.path_pub=self.create_publisher(Path,"/camera/path",10); self.valid_pub=self.create_publisher(Bool,"/camera/path_valid",10)
         self.conf_pub=self.create_publisher(Float32,"/camera/path_confidence",10); self.mode_pub=self.create_publisher(Int8,"/camera/path_mode",10)
         self.status_pub=self.create_publisher(String,"/camera/path_status",10)
+        self.debug_pub=self.create_publisher(
+            Image,"/camera/path_debug_image",qos_profile_sensor_data)
+        self.last_debug_time=-float("inf")
         self.yellow_ahead_pub=self.create_publisher(Float32,"/camera/yellow_line_ahead_m",10)
         self.yellow_ahead_valid_pub=self.create_publisher(Bool,"/camera/yellow_line_ahead_valid",10)
         self.create_timer(.05,self.tick)
@@ -96,6 +108,49 @@ class CameraPathPlanner(Node):
     def publish_invalid(self, reason="invalid"):
         self.path_pub.publish(Path(header=self._header())); self.valid_pub.publish(Bool(data=False)); self.conf_pub.publish(Float32(data=0.)); self.mode_pub.publish(Int8(data=INVALID)); self.status_pub.publish(String(data=reason)); self.yellow_ahead_valid_pub.publish(Bool(data=False))
 
+    def publish_debug(self,road,white,yellow,path,bev,mode,confidence,valid,
+                      lateral_extent):
+        now=time.monotonic();fps=max(0.0,float(self.p("debug_image_fps")))
+        if fps<=0.0 or now-self.last_debug_time<1.0/fps:return
+        self.last_debug_time=now
+        canvas=np.zeros((*road.shape,3),np.uint8)
+        canvas[road>0]=(0,90,0)
+        canvas[white>0]=(255,255,255)
+        canvas[yellow>0]=(0,220,255)
+        for meter in range(1,int(self.p("bev_forward_max_m"))+1):
+            col,row=bev.ground_to_bev(float(meter),0.0)
+            ri=int(round(row))
+            if 0<=ri<canvas.shape[0]:
+                cv2.line(canvas,(0,ri),(canvas.shape[1]-1,ri),(70,70,70),1)
+                cv2.putText(canvas,f"{meter}m",(3,max(12,ri-2)),
+                            cv2.FONT_HERSHEY_SIMPLEX,.35,(180,180,180),1)
+        points=[]
+        for x,y in path:
+            col,row=bev.ground_to_bev(float(x),float(y))
+            points.append((int(round(col)),int(round(row))))
+        if len(points)>=2:
+            cv2.polylines(canvas,[np.asarray(points,np.int32)],False,
+                          (0,0,255),3,cv2.LINE_AA)
+        cv2.rectangle(canvas,(0,0),(canvas.shape[1]-1,canvas.shape[0]-1),
+                      (255,0,255),2)
+        cv2.circle(canvas,(canvas.shape[1]//2,canvas.shape[0]-5),5,
+                   (255,0,0),-1)
+        label=(f"SEC {self.section} ROI +/-{lateral_extent:.1f}m "
+               f"FWD {self.p('bev_forward_max_m'):.1f}m")
+        cv2.rectangle(canvas,(0,0),(canvas.shape[1]-1,42),(0,0,0),-1)
+        cv2.putText(canvas,label,(6,16),cv2.FONT_HERSHEY_SIMPLEX,.42,
+                    (0,255,0),1,cv2.LINE_AA)
+        cv2.putText(canvas,f"PATH red mode={mode} conf={confidence:.2f} valid={valid}",
+                    (6,35),cv2.FONT_HERSHEY_SIMPLEX,.38,(0,255,255),1,
+                    cv2.LINE_AA)
+        scale=max(1,min(4,int(700/max(canvas.shape))))
+        if scale>1:canvas=cv2.resize(canvas,None,fx=scale,fy=scale,
+                                     interpolation=cv2.INTER_NEAREST)
+        message=Image(header=self._header(),height=canvas.shape[0],
+                      width=canvas.shape[1],encoding="bgr8",is_bigendian=0,
+                      step=canvas.shape[1]*3,data=canvas.tobytes())
+        self.debug_pub.publish(message)
+
     def tick(self):
         try:
             if self.info is None:return self.publish_invalid("missing_camera_info")
@@ -117,9 +172,9 @@ class CameraPathPlanner(Node):
             road,white,yellow=(bev.warp(self.masks[key]) for key in ("road","white","yellow"))
             if any(mask is None for mask in (road,white,yellow)):return self.publish_invalid("bev_warp_failed")
             left,right=extract_boundary(yellow,bev),extract_boundary(white,bev)
-            rows,cols=np.nonzero(road>0); road_points=np.empty((0,2))
-            if len(rows)>20:
-                unique=np.unique(rows); road_points=np.array([bev.bev_to_ground(float(np.median(cols[rows==row])),row) for row in unique])
+            rows,cols=np.nonzero(road>0)
+            road_points=connected_road_center(
+                road,bev,self.p("road_mask_close_kernel_pixels"))
             age=np.inf if self.previous_time is None else self.now()-self.previous_time
             boundary_clearance = (
                 self.p("vehicle_width_m")/2
@@ -127,6 +182,15 @@ class CameraPathPlanner(Node):
             path,mode=generate_path(
                 left,right,road_points,self.p("lane_width_m"),self.previous,
                 age,self.p("temporal_hold_timeout_sec"),boundary_clearance)
+            # Painted words can hide a boundary for one or two inference
+            # frames. Do not alternate immediately between the offset lane
+            # path and the geometrically different road-centre path.
+            lane_age=(np.inf if self.last_lane_path_time is None else
+                      self.now()-self.last_lane_path_time)
+            if (mode==ROAD_ONLY and self.last_lane_path is not None and
+                    lane_age<=self.p("lane_mode_hold_timeout_sec")):
+                path=np.asarray(self.last_lane_path).copy()
+                mode=TEMPORAL_HOLD
             if self.section == 5:
                 corridor = clearance_corridor_path(
                     road, bev, self.p("vehicle_width_m"),
@@ -153,10 +217,22 @@ class CameraPathPlanner(Node):
             elif state == TurnState.LANE_REACQUIRE and self.turn_template is not None and len(path)>=2:
                 path,mode=blend_reacquire(self.turn_template,path,.5),LANE_REACQUIRE
             elif state == TurnState.ABORT:return self.publish_invalid("turn_state_aborted")
+            # Preserve the explicitly clearance-checked S-curve path and turn
+            # template. Ordinary lane/road paths are stabilized before they
+            # can move the Pure Pursuit target.
+            if len(path)>=3 and mode not in (TURN_TEMPLATE,OBSTACLE_CORRIDOR):
+                path=stabilize_path(
+                    path,self.previous,self.p("path_spatial_filter_window"),
+                    self.p("path_new_frame_weight"),
+                    self.p("path_maximum_frame_shift_m"))
             confidence={1:1.,2:.65,3:.65,4:.5,5:.3,OBSTACLE_CORRIDOR:.7}.get(mode,0.); valid=validate_path(path,confidence,max_forward_m=self.p("bev_forward_max_m"))
             if mode==TURN_TEMPLATE:confidence=.7*self.turn_sm.confidence;valid=validate_path(path,confidence,max_forward_m=self.p("bev_forward_max_m"))
             elif mode==LANE_REACQUIRE:confidence=.6;valid=validate_path(path,confidence,max_forward_m=self.p("bev_forward_max_m"))
-            if valid and mode != 5:self.previous=path; self.previous_time=self.now()
+            if valid and mode != TEMPORAL_HOLD:
+                self.previous=path; self.previous_time=self.now()
+            if valid and mode in (BOTH_BOUNDARIES,LEFT_ONLY,RIGHT_ONLY):
+                self.last_lane_path=np.asarray(path).copy()
+                self.last_lane_path_time=self.now()
             yellow_ahead=[]
             if valid and len(left)>=2 and len(path)>=2:
                 order=np.argsort(path[:,0]); px,py=path[order,0],path[order,1]
@@ -172,6 +248,8 @@ class CameraPathPlanner(Node):
                 pose=PoseStamped(header=message.header); pose.pose.position.x=float(x); pose.pose.position.y=float(y); pose.pose.orientation.w=1.; message.poses.append(pose)
             self.path_pub.publish(message); self.valid_pub.publish(Bool(data=valid)); self.conf_pub.publish(Float32(data=confidence)); self.mode_pub.publish(Int8(data=mode))
             self.status_pub.publish(String(data="ok" if valid else "generated_path_invalid"))
+            self.publish_debug(road,white,yellow,path,bev,mode,confidence,
+                               valid,lateral_extent)
         except (KeyError,TypeError,ValueError) as error:
             self.publish_invalid(f"planner_exception:{type(error).__name__}:{error}")
 

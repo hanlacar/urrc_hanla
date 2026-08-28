@@ -12,7 +12,7 @@ def info(**changes):
     value.update(changes);return value
 def point(name,x,y,u=None,v=None):return {"name":name,"pixel_u":u,"pixel_v":v,"expected_x_m":x,"expected_y_m":y}
 def exact_point(name,x,y):
-    uv=CameraGeometry(K).ground_to_pixel(x,y);return point(name,x,y,*uv)
+    uv=CameraGeometry(K,(.38,0.,.96),(0.,-5.,0.)).ground_to_pixel(x,y);return point(name,x,y,*uv)
 def reference(points):return {"frame_id":"rgb_optical","image_width":640,"image_height":480,"points":points}
 
 def test_camera_info_k_valid():assert validate_camera_info(info())[0]

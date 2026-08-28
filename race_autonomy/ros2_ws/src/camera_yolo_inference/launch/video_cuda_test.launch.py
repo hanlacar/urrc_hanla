@@ -5,21 +5,62 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogI
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
     share=Path(get_package_share_directory("camera_yolo_inference"))
+    navigation=Path(get_package_share_directory("camera_navigation"))
+    control=Path(get_package_share_directory("race_control"))
     video=LaunchConfiguration("video_path")
     return LaunchDescription([
-        DeclareLaunchArgument("video_path",default_value="/home/parkjinwoo/Downloads/asdf.mp4"),
-        DeclareLaunchArgument("fps",default_value="15.0"),
-        LogInfo(msg="Video CUDA test: output image is /perception/detections_image"),
+        DeclareLaunchArgument(
+            "video_path",
+            default_value=(
+                "/home/parkjinwoo/urrc_hanla/recordings/raw/"
+                "20260827_070334_from_0530.mp4"
+            ),
+        ),
+        DeclareLaunchArgument("fps",default_value="60.0"),
+        DeclareLaunchArgument("loop",default_value="false"),
+        DeclareLaunchArgument("maximum_drive_stage",default_value="1"),
+        DeclareLaunchArgument("launch_rqt",default_value="true"),
+        LogInfo(msg=("Video CUDA section-1 test: YOLO labels + camera path + "
+                     "Pure Pursuit overlay on /perception/detections_image; "
+                     "path stability on /camera/path_accuracy")),
         Node(package="camera_yolo_inference",executable="video_publisher_node",
              parameters=[{"video_path":video,"fps":LaunchConfiguration("fps"),
+                          "loop":LaunchConfiguration("loop"),
                           "width":640,"height":480}],output="screen"),
         IncludeLaunchDescription(PythonLaunchDescriptionSource(str(share/"launch"/"yolo_inference.launch.py")),
             launch_arguments={"device":"cuda:0","require_cuda":"true","input_width":"640","input_height":"480",
                               "inference_fps":"40.0","detections_image_fps":"30.0",
+                              "navigation_bottom_exclusion_ratio":"0.18",
                               "expected_image_width":"640","expected_image_height":"480","max_image_age_sec":"1.0",
-                              "max_inference_latency_ms":"200.0"}.items()),
+                              "max_inference_latency_ms":"200.0",
+                              "launch_rqt":LaunchConfiguration("launch_rqt")}.items()),
+        Node(package="camera_navigation",executable="camera_path_planner_node",
+             parameters=[str(navigation/"config"/"camera_navigation.yaml"),
+                         {"input_mode":"external"}],output="screen"),
+        Node(package="camera_navigation",executable="camera_path_controller_node",
+             parameters=[str(navigation/"config"/"camera_navigation.yaml")],
+             output="screen"),
+        Node(package="race_control",executable="curvature_speed_planner",
+             name="curvature_speed_planner_node",
+             parameters=[str(control/"config"/"curvature_speed_planner.yaml")],
+             output="screen"),
+        Node(package="race_control",executable="course_mission",
+             parameters=[str(control/"config"/"course_mission.yaml"),
+                         # This recording's hood hides the nearest ~2.1 m.
+                         # Keep the production/real-car default at 1.0 m and
+                         # relax only this offline video-quality experiment.
+                         {"path_required_near_point_m":2.5,
+                          "vehicle_speed_topic":"/mcu/speed_mps",
+                          "vehicle_speed_valid_topic":"/mcu/speed_valid",
+                          "input_guard_topic":"/video/frame_active",
+                          "input_guard_timeout_sec":0.3,
+                          "output_maximum_stage":ParameterValue(
+                              LaunchConfiguration("maximum_drive_stage"),
+                              value_type=int)}],
+             output="screen"),
     ])

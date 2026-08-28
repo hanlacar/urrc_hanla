@@ -5,6 +5,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, Image
+from std_msgs.msg import Bool
 
 
 class VideoPublisher(Node):
@@ -17,7 +18,11 @@ class VideoPublisher(Node):
         self.cap = cv2.VideoCapture(str(self.p("video_path")))
         if not self.cap.isOpened(): raise RuntimeError(f"cannot open video: {self.p('video_path')}")
         self.image_pub = self.create_publisher(Image, "/camera/image_raw", qos_profile_sensor_data)
-        self.info_pub = self.create_publisher(CameraInfo, "/camera/camera_info", qos_profile_sensor_data)
+        # CameraInfo consumers use the normal reliable profile. Publishing it
+        # as best-effort sensor data makes the planner reject the endpoint and
+        # leaves every offline-video path invalid.
+        self.info_pub = self.create_publisher(CameraInfo, "/camera/camera_info", 10)
+        self.active_pub = self.create_publisher(Bool, "/video/frame_active", 10)
         self.create_timer(1.0/max(1.0,float(self.p("fps"))), self.tick)
 
     def p(self, name): return self.get_parameter(name).value
@@ -26,7 +31,9 @@ class VideoPublisher(Node):
         ok, frame = self.cap.read()
         if not ok and bool(self.p("loop")):
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0); ok, frame = self.cap.read()
-        if not ok: return
+        if not ok:
+            self.active_pub.publish(Bool(data=False))
+            return
         width, height = int(self.p("width")), int(self.p("height"))
         frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
         stamp = self.get_clock().now().to_msg(); frame_id = str(self.p("frame_id"))
@@ -39,8 +46,11 @@ class VideoPublisher(Node):
         info.r=[1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0]
         info.p=[focal,0.0,width/2.0,0.0,0.0,focal,height/2.0,0.0,0.0,0.0,1.0,0.0]
         self.info_pub.publish(info)
+        self.active_pub.publish(Bool(data=True))
 
     def destroy_node(self):
+        if rclpy.ok():
+            self.active_pub.publish(Bool(data=False))
         self.cap.release(); return super().destroy_node()
 
 

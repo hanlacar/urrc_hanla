@@ -9,7 +9,7 @@ from camera_navigation.mock_scenario_generator import make_masks
 
 K=[387.36212158203125,0.,317.412841796875,0.,386.8159484863281,247.76675415039062,0.,0.,1.]
 D=[-0.05530029907822609,0.0644579529762268,0.0000892298630787991,0.0009998686145991087,-0.02068493515253067]
-def metadata():return {"image_topic":"/camera/image_raw","timestamp":1.,"frame_id":"camera_color_optical_frame","width":640,"height":480,"encoding":"rgb8","camera_info":{"k":K,"d":D,"distortion_model":"plumb_bob"},"camera_extrinsic":{"camera_x_m":0.,"camera_y_m":0.,"camera_z_m":.45,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-10.,"camera_mount_yaw_deg":0.}}
+def metadata():return {"image_topic":"/camera/image_raw","timestamp":1.,"frame_id":"camera_color_optical_frame","width":640,"height":480,"encoding":"rgb8","camera_info":{"k":K,"d":D,"distortion_model":"plumb_bob"},"camera_extrinsic":{"camera_x_m":0.,"camera_y_m":0.,"camera_z_m":.45,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.}}
 def write_sample(root,scenario="STRAIGHT_BOTH"):
     root.mkdir();cv2.imwrite(str(root/"image_raw.png"),np.zeros((480,640,3),np.uint8));(root/"metadata.yaml").write_text(yaml.safe_dump(metadata()))
     for name,mask in zip(("road_mask.png","white_line_mask.png","yellow_line_mask.png"),make_masks(scenario)):cv2.imwrite(str(root/name),mask)

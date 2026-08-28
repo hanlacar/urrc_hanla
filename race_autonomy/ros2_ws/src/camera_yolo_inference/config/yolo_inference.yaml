@@ -16,6 +16,16 @@ camera_yolo_inference_node:
     lane_minimum_component_area: 80
     lane_maximum_horizontal_ratio: 4.0
     lane_minimum_horizontal_width: 80
+    # Production default: no fixed hood crop. Offline video launch overrides
+    # this to 0.18 for the recorded vehicle-front obstruction.
+    navigation_bottom_exclusion_ratio: 0.0
+    # Measured D456 lens centre relative to rear-axle base_link.
+    camera_x_m: 0.38
+    camera_y_m: 0.0
+    camera_z_m: 0.96
+    camera_mount_roll_deg: 0.0
+    camera_mount_pitch_deg: -5.0
+    camera_mount_yaw_deg: 0.0
     max_image_age_sec: 0.40
     # TensorRT on the MX450 is normally near 40 ms but can exceed that during
     # scheduling jitter.  Reject genuinely stale work without invalidating the

@@ -17,17 +17,20 @@
     # base_x=raw_z, base_y=-raw_x, base_z=-raw_y.
     # Physical pitch/roll/yaw movements must still confirm the signs.
     sensor_axis_matrix: [0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0]
-    # Roll/Pitch are replaced in memory by startup calibration when enabled.
-    mounting_roll_deg: 0.0
-    mounting_pitch_deg: 0.0
+    # LEVEL calibration 2026-08-28 16:34 KST (validation/physical sanity PASS).
+    # These rotate the fixed D456 mounting into the vehicle base frame.
+    mounting_roll_deg: -1.1741885379425412
+    mounting_pitch_deg: 8.777482483322359
     # Gravity cannot observe yaw; mechanically align camera and vehicle forward.
     mounting_yaw_deg: 0.0
     orientation_roll_pitch_variance: 0.02
     # Large because yaw is relative gyro integration, never absolute heading.
     orientation_yaw_variance: 1.0
     # Used only when startup_calibration_enabled is false.
-    calibration_validated: false
-    startup_calibration_enabled: true
+    calibration_validated: true
+    # Use the reviewed fixed LEVEL result above. Re-enable only when the
+    # camera mount changes and the vehicle can remain level at every startup.
+    startup_calibration_enabled: false
     startup_calibration_duration_sec: 3.0
     startup_calibration_timeout_sec: 15.0
     startup_gyro_still_threshold_rad_s: 0.05

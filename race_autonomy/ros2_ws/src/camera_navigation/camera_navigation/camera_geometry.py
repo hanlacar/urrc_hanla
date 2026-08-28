@@ -30,7 +30,7 @@ OPTICAL_TO_FORWARD = np.array([[0., 0., 1.], [-1., 0., 0.], [0., -1., 0.]])
 
 
 class CameraGeometry:
-    def __init__(self, k, camera_xyz=(0., 0., .845), mount_rpy_deg=(0., -10., 0.), max_distance_m=30., distortion_coeffs=None, distortion_model="plumb_bob", pixel_contract="raw"):
+    def __init__(self, k, camera_xyz=(.245, 0., .85), mount_rpy_deg=(0., -5., 0.), max_distance_m=30., distortion_coeffs=None, distortion_model="plumb_bob", pixel_contract="raw"):
         self.k = np.asarray(k, dtype=float).reshape(3, 3)
         self.distortion = np.zeros(5,dtype=float) if distortion_coeffs is None else np.asarray(distortion_coeffs,dtype=float).reshape(-1)
         self.distortion_model=str(distortion_model);self.pixel_contract=str(pixel_contract)

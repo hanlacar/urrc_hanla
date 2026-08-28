@@ -1,0 +1,276 @@
+# t870_mcu.yaml
+#
+# ★ 내부 토픽 이름을 /mcu/cmd_* 로 바꿨다.
+#   이유: GPS팀이 /mcu_drive, /mcu_wheel 을 자기 출력으로 쓰고 있어서
+#   그대로 두면 GPS 명령이 중재기를 건너뛰고 브릿지로 직행한다.
+#   (같은 토픽에 발행자 둘 → 중재 무력화 + 명령 충돌)
+#
+#   manager  →  /mcu/cmd_drive, /mcu/cmd_wheel, /mcu/cmd_stop  →  bridge
+#   GPS팀    →  /mcu_drive, /mcu_wheel  →  manager 의 입력 중 하나로 취급
+
+# ============================================================
+# 시리얼 브릿지
+# ============================================================
+mcu_bridge:
+  ros__parameters:
+    # "auto" = 아두이노를 스스로 찾는다 (권장. 팀원 PC 마다 번호가 다르다).
+    #   탐색 순서: port_symlinks → /dev/serial/by-id 장치 이름
+    #   특정 포트를 강제하려면 "/dev/ttyACM1" 처럼 경로를 직접 쓴다.
+    port: "auto"
+
+    # setup.sh 가 udev 로 만들어주는 고정 이름. 벤더 ID 기준이라
+    # 어느 컴퓨터에서 클론해도 동일하게 잡힌다.
+    port_symlinks: ["/dev/t870_mcu"]
+
+    # 자동 탐색 실패 시 시도할 포트. 비워두는 것이 안전하다.
+    # ★ 예전에는 /dev/ttyACM0 을 무작정 열었다. 거기 GPS 가 앉아 있으면
+    #   GPS 포트로 구동 명령을 쏘게 된다. 실제로 반나절을 날린 적이 있다.
+    fallback_port: ""
+
+    baud: 115200
+
+    # 중재기 출력을 구독한다. 팀 토픽을 직접 구독하지 않는다.
+    input_drive_topic: "/mcu/cmd_drive"
+    input_wheel_topic: "/mcu/cmd_wheel"
+    input_stop_topic: "/mcu/cmd_stop"
+    estop_topic: "/estop_lock"
+    reset_estop_service: "/mcu/reset_estop"
+
+    send_hz: 10.0
+    drive_timeout_s: 0.5
+    wheel_timeout_s: 0.5
+    status_poll_hz: 5.0
+
+    max_steer_deg: 27.0
+    steer_limit_ms: 440
+    steer_cmd_mode: "W"
+    wheel_timeout_policy: "hold_last"
+
+    # ---------- 직진 보정 ----------
+    # 차가 한쪽으로 흘러갈 때 모든 조향 명령에 더하는 고정 각도. +우 / -좌
+    # 오른쪽으로 흘러가면 음수, 왼쪽으로 흘러가면 양수를 넣는다.
+    #
+    # 구하는 법: 조향 중앙으로 직진 d[m] 주행 후 횡오차 y[m] 측정
+    #     보정각[도] = -degrees( 2 * y * 0.73 / d^2 )
+    #   예) 5m 에 오른쪽으로 0.20m 치우침 -> -1.3도
+    #
+    # 원인이 조향 영점이든 뒷축 틀어짐이든 같은 방식으로 보정된다.
+    steer_offset_deg: 0.0
+
+    # ---------- 급정거 ----------
+    #
+    # ★ 2026-08-28 수정. 그 전까지 "1.00"(감속 램프 정지)이 들어 있었다.
+    #   v29 부터 램프를 건너뛰는 제동 명령 B 가 있는데 쓰지 않고 있었다.
+    #   → 라이다가 estop 을 걸어도 실제로는 0.5초짜리 램프가 나갔다.
+    #
+    # ⚠ B 를 매 주기 반복 전송하면 안 된다. 펌웨어가 제동 펄스 타이머를
+    #   매번 다시 찍어 역토크가 유지되고 차가 뒤로 간다.
+    #   브릿지가 "상승 에지 1회 + 이후 hold 반복"으로 처리한다.
+    estop_serial_command: "B"       # 급정거 순간 1회
+    estop_hold_command: "1.00"      # 이후 정지 유지 + 워치독 급식
+    estop_repeat_s: 0.5             # 제동 재시도 간격. 0=재시도 없음
+                                    # 펌웨어 BRAKE_MAX_MS(0.30s)보다 커야 함
+                                    # ⚠ 더 좁히지 말 것 — 제동 방향이 "마지막
+                                    #   명령 방향" 기준이라, 멈춘 뒤 뒤로 밀리면
+                                    #   다음 펄스가 후진을 가속한다
+    stop_timeout_s: 0.5
+
+    center_steer_on_connect: true
+    arduino_reset_wait_s: 2.0
+    reconnect_delay_s: 1.0
+    telemetry_timeout_s: 2.0
+    latch_on_firmware_fault: true
+    coasting_policy: "last_direction"
+
+    # ---------- 발행 토픽 ----------
+    # 전부 /mcu/ 네임스페이스 아래로 모았다.
+    # 다른 팀이 쓰던 /rpm, /steer_angle, /vehicle/* 같은 최상위 이름과
+    # 절대 겹치지 않아 발행자 충돌이 생기지 않는다.
+    # (/odom 만 예외 — Nav2 표준 이름이라 그대로 둔다)
+    pub_topic_encoder: "/mcu/encoder"              # 엔코더 누적 카운트 (Int32)
+    pub_topic_steer_angle: "/mcu/steer_deg"      # 조향각 추정 [도] (Float32)
+    pub_topic_rpm: "/mcu/rpm"
+    pub_topic_steer_a0: "/mcu/steer_a0"
+    pub_topic_steer_ms: "/mcu/steer_ms"
+    pub_topic_speed_mps: "/mcu/speed_mps"
+    pub_topic_speed_kph: "/mcu/speed_kph"
+    pub_topic_distance: "/mcu/distance_m"
+    pub_topic_speed_valid: "/mcu/speed_valid"
+    pub_topic_connected: "/mcu/connected"
+    pub_topic_status: "/mcu/fw_state"
+    pub_topic_raw_status: "/mcu/raw_status"
+    pub_topic_feedback_valid: "/mcu/telemetry_ok"
+    pub_topic_fault: "/mcu/fault"
+    pub_topic_fault_text: "/mcu/fault_text"
+    pub_topic_ready: "/mcu/ready"
+    pub_topic_iface_status: "/mcu/iface_state"
+    pub_topic_estop: "/mcu/estop_latched"
+    pub_topic_hard_stop: "/mcu/hard_stop_active"
+    pub_topic_odom: "/odom"
+
+    # 구버전 이름(/drive, /wheel, /arduino/telemetry_ok)도 같이 발행할지.
+    # 최상위 이름이라 다른 팀과 충돌할 수 있다. 기본 false 유지.
+    publish_legacy_names: false
+
+    # 2026-08-26 실측: 10m ×3회, 평균 533.1 (편차 15.2%)
+    # 1카운트 = 1.9mm, 바퀴 1회전 = 436카운트 (둘레 0.817m)
+    # ⚠ 편차가 커서 재측정 권장. 값이 바뀌면 여기만 고치면 된다.
+    # 2026-08-28 vehicle measurement: 543 encoder counts per metre.
+    counts_per_meter: 543.0
+    # Physical rear-axle to front-axle distance.
+    wheelbase_m: 0.77
+    encoder_signed: false
+    odom_frame: "odom"
+    base_frame: "base_link"
+    publish_tf: true
+
+
+# ============================================================
+# 명령 중재기
+# ============================================================
+mcu_manager:
+  ros__parameters:
+    source_names: [lidar, camera, gps, manual]
+
+    # 구동: 고정 우선순위 (앞이 이김)
+    drive_priority: [lidar, camera, gps]
+
+    # ========================================================
+    # 대회 구간 모드 — 2026-08-28 틀 (문자열 미확정)
+    #
+    # ⚠ 아직 팀 확정 전이다. 이름이 바뀌면 known_modes 와
+    #   wheel_owner_overrides 두 곳만 고치면 된다. 코드 수정 불필요.
+    #
+    # 구간 순서 (MCU 정리.txt 기준)
+    #   1  START            시작            DR + 카메라
+    #   2  SLOPE            경사로          DR + GPS + 카메라, 정지선 3초
+    #   3  CRANK            직각(굴절)코스   카메라 + GPS + DR
+    #   4  INTERSECTION_1   교차로1 직진     waypoint, 신호
+    #   5  S_COURSE         곡선코스+장애물  라이다 우선(폴백 미정)
+    #   6  INTERSECTION_2   교차로2 직진     + T자 진입 우회전(GPS)
+    #   7  T_PARK           T자주차         라이다 또는 GPS
+    #   8  INTERSECTION_3   교차로3 좌회전
+    #   9  ACCELERATION     가속구간        라이다 우회 금지
+    #   10 PARALLEL_PARK    평행주차        T자와 동일
+    #   11 FINISH           종료            신호수(?)
+    #
+    #   IDLE               시동 직후 기본값
+    #   SUDDEN_STOP        돌발 — 모드가 아니라 이벤트일 가능성이 높다.
+    #                      /<팀>_stop 으로 이미 처리되므로 모드는 예비용
+    # ========================================================
+    known_modes:
+      - "IDLE"
+      - "START"
+      - "SLOPE"
+      - "CRANK"
+      - "INTERSECTION_1"
+      - "S_COURSE"
+      - "INTERSECTION_2"
+      - "T_PARK"
+      - "INTERSECTION_3"
+      - "ACCELERATION"
+      - "PARALLEL_PARK"
+      - "FINISH"
+      - "SUDDEN_STOP"
+
+    # known_modes 에 없는 모드가 오면:
+    #   keep    = 직전 모드 유지 + ERROR 로그 (권장)
+    #   default = 기본 소유자로 (조용히 넘어가던 기존 동작)
+    unknown_mode_policy: "keep"
+
+    # ---------- 조향 권한 ----------
+    # 기본은 카메라. 아래 모드에서만 다른 팀이 가져간다.
+    # 지금은 주차 두 개만 확정. S_COURSE 는 팀 결정 대기 중이라 비워뒀다.
+    wheel_owner_default: "camera"
+    wheel_owner_overrides:
+      - "T_PARK:lidar"
+      - "PARALLEL_PARK:lidar"
+      # 아래는 확정되면 주석을 풀 것 ------------------------
+      # - "S_COURSE:lidar"        # 라이다가 장애물 우회 조향
+      # - "ACCELERATION:camera"   # 기본과 같아 사실 불필요
+    wheel_failsafe_mode: "center"
+
+    # 급정거 (래치 아님)
+    # ★ 0828: manual 추가.
+    #   여기 없으면 매니저가 /manual_stop 을 구독조차 하지 않는다.
+    #   drive_wasd.py 의 F(급정거) 키가 아무 일도 하지 않고 있었다.
+    stop_sources: [lidar, camera, manual]
+    stop_timeout_s: 0.5
+
+    manual_override_enabled: true
+    manual_source_name: "manual"
+
+    initial_mode: "IDLE"
+    publish_hz: 20.0
+    drive_timeout_s: 0.5
+    wheel_timeout_s: 0.5
+
+    drive_validation_mode: "allowed_values"
+    drive_allowed_values: [-1.0, 0.0, 1.0, 2.0, 3.0]
+    drive_min: -1.0
+    drive_max: 3.0
+    wheel_min: -27
+    wheel_max: 27
+
+    # m/s → 단계 변환, Twist 변환용
+    max_steer_deg: 27.0
+    wheelbase_m: 0.77
+    mps_deadband: 0.05
+
+    mode_topic: "/vehicle_mode"
+    estop_topic: "/estop_lock"
+
+    # 내부 전용. 브릿지만 구독한다. 팀은 여기 발행하지 않는다.
+    output_drive_topic: "/mcu/cmd_drive"
+    output_wheel_topic: "/mcu/cmd_wheel"
+    output_stop_topic: "/mcu/cmd_stop"
+
+    status_mode_topic: "/mcu/current_mode"
+    status_drive_source_topic: "/mcu/active_drive_source"
+    status_wheel_source_topic: "/mcu/active_wheel_source"
+    status_safety_topic: "/mcu/safety_state"
+    status_ready_topic: "/mcu/ready"
+
+    # ========================================================
+    # 팀별 입력 — 실제 팀에서 나온 이름으로 설정
+    #
+    #   drive_unit  : "stage"(0/1/2/3/-1) | "mps"(m/s → 단계 자동변환)
+    #   wheel_type  : "int"(Int32 도) | "float"(Float32 도)
+    #                 | "norm"(Float32 -1.0~+1.0)
+    #   cmd_vel_topic: 값이 있으면 Twist 를 구독해 자전거모델로 자동 변환
+    #                  (이 경우 drive/wheel 토픽은 무시됨)
+    # ========================================================
+
+    # ---- 라이다 ----
+    lidar_drive_topic: "/lidar_drive"
+    lidar_wheel_topic: "/lidar_wheel"
+    lidar_stop_topic: "/lidar_stop"
+    lidar_drive_unit: "stage"
+    lidar_wheel_type: "int"
+    # Nav2 를 그대로 쓰려면 여기에 Twist 토픽을 넣으면 자동 변환된다.
+    # (넣으면 위 drive/wheel 토픽은 무시됨)
+    lidar_cmd_vel_topic: ""
+
+    # ---- 카메라 ----
+    camera_drive_topic: "/camera_drive"
+    camera_wheel_topic: "/camera_wheel"
+    camera_stop_topic: "/camera_stop"
+    camera_drive_unit: "stage"
+    camera_wheel_type: "int"
+    camera_cmd_vel_topic: ""
+
+    # ---- GPS ----
+    gps_drive_topic: "/gps_drive"
+    gps_wheel_topic: "/gps_wheel"
+    gps_stop_topic: "/gps_stop"
+    gps_drive_unit: "stage"
+    gps_wheel_type: "int"
+    gps_cmd_vel_topic: ""
+
+    # ---- 수동 (우리 테스트용) ----
+    manual_drive_topic: "/manual_drive"
+    manual_wheel_topic: "/manual_wheel"
+    manual_stop_topic: "/manual_stop"
+    manual_drive_unit: "stage"
+    manual_wheel_type: "int"
+    manual_cmd_vel_topic: ""

@@ -1,11 +1,11 @@
-"""ROS-independent state logic for the 13-section driving course."""
+"""ROS-independent state logic for the 11-section driving course."""
 
 from dataclasses import dataclass
 
 
 LEFT, STRAIGHT, RIGHT = -1, 0, 1
 CAMERA = 1
-INTERSECTIONS = {4, 6, 8, 11}
+INTERSECTIONS = {4, 6, 8}
 
 
 def section_after_ramp_detection(section, imu_valid, pitch_deg,
@@ -46,6 +46,7 @@ class MissionInput:
     yellow_ahead_valid: bool = False
     speed_mps: float = 0.0
     speed_valid: bool = False
+    input_guard_alive: bool = False
 
 
 @dataclass
@@ -138,7 +139,7 @@ class CourseMission:
             self.traffic20_count = 0
             self.traffic20_active = False
             self.traffic20_absent_start = None
-        if section != 13:
+        if section != 11:
             self.final_stopped = False
         return True
 
@@ -311,7 +312,7 @@ class CourseMission:
                 else "PARALLEL_PARK:PATH_FOLLOW_PUBLISHING",
                 direction)
 
-        if section == 13:
+        if section == 11:
             at_line=(data.stop_detected and data.stop_distance_valid and
                      data.stop_distance_m <= 1.0)
             if data.final_signal_red and at_line:
@@ -328,7 +329,7 @@ class CourseMission:
                 data, data.camera_steering_deg,
                 "S_CURVE:OBSTACLE_YELLOW_CORRIDOR_PATH_FOLLOW", direction)
 
-        names = {1: "START", 3: "CURVE_CENTERING", 12: "SHARP_CURVE"}
+        names = {1: "START", 3: "CURVE_CENTERING"}
         return self.camera_output(
             data, data.camera_steering_deg,
             names.get(section, "CAMERA_CENTERING"), direction)

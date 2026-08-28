@@ -27,3 +27,13 @@ course_mission_node:
     green_confirm_sec: 0.0
     command_rate_hz: 20.0
     sensor_timeout_sec: 0.5
+    # Compare successive paths over X=0.5..3.0 m. A median lateral shift of
+    # 0.25 m or more is reported as a path jump to the external MCU computer.
+    path_jump_threshold_m: 0.25
+    path_jump_forward_min_m: 0.5
+    path_jump_forward_max_m: 3.0
+    # Spatial quality prevents a stable but zigzag/far-only path from being
+    # reported as 100 percent accurate.
+    path_required_forward_span_m: 1.5
+    path_required_near_point_m: 1.0
+    path_maximum_lateral_step_m: 0.15

@@ -20,7 +20,7 @@ def stop_box_distance_m(box, geometry, camera_x_m, vertical_ratio=0.5):
 class StopLineGroundNode(Node):
     def __init__(self):
         super().__init__("stop_line_ground_node")
-        defaults={"max_detection_age_sec":.35,"camera_x_m":.245,"camera_y_m":.004,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-10.,"camera_mount_yaw_deg":0.,"box_vertical_ratio":.5,"maximum_distance_m":30.}
+        defaults={"max_detection_age_sec":.35,"camera_x_m":.245,"camera_y_m":0.,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.,"box_vertical_ratio":.5,"maximum_distance_m":30.}
         for name,value in defaults.items():self.declare_parameter(name,value)
         self.info=None;self.box=None;self.box_time=None
         self.distance_pub=self.create_publisher(Float32,"/perception/stop_line_distance_m",10);self.valid_pub=self.create_publisher(Bool,"/perception/stop_line_distance_valid",10)

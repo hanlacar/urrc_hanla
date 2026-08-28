@@ -134,7 +134,7 @@ class TrafficLightColorNode(Node):
         })))
 
     def on_final_image(self,msg):
-        if self.active_section != 13:
+        if self.active_section != 11:
             self.final_candidate="UNKNOWN";self.final_candidate_start=None
             return
         now=time.monotonic();period=1.0/max(1.0,float(self.param("final_process_hz")))

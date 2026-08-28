@@ -1,9 +1,9 @@
 """Mission-aware lateral bounds for the camera bird's-eye-view ROI."""
 
 
-INTERSECTION_SECTIONS = frozenset((4, 6, 8, 11))
-FIXED_NORMAL_SECTIONS = frozenset((1, 2, 7, 9, 10, 13))
-CURVE_SECTIONS = frozenset((3, 5, 12))
+INTERSECTION_SECTIONS = frozenset((4, 6, 8))
+FIXED_NORMAL_SECTIONS = frozenset((1, 2, 7, 9, 10, 11))
+CURVE_SECTIONS = frozenset((3, 5))
 
 
 def lateral_extent_m(section, turn_direction, normal_m=1.2, turn_m=1.5,

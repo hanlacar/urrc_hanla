@@ -15,6 +15,29 @@ def test_lane_mask_is_sufficient_navigation_evidence():
     assert has_navigation_mask({"road":zero,"white_line":lane,"yellow_line":zero})
     assert not has_navigation_mask({"road":zero,"white_line":zero,"yellow_line":zero})
 
+def test_nearby_painted_words_are_restored_as_road():
+    road=np.zeros((60,80),np.uint8);road[20:50,10:30]=255
+    words=np.zeros_like(road);words[25:40,30:42]=255
+    restored=restore_road_surface_words(road,words,proximity_pixels=5)
+    assert np.count_nonzero(restored[:,30:35])>0
+
+def test_remote_words_do_not_become_drivable_road():
+    road=np.zeros((60,80),np.uint8);road[20:50,5:20]=255
+    words=np.zeros_like(road);words[20:40,60:75]=255
+    restored=restore_road_surface_words(road,words,proximity_pixels=5)
+    assert np.count_nonzero(restored[:,60:75])==0
+
+def test_video_hood_exclusion_zeros_only_bottom_navigation_pixels():
+    source=np.full((100,200),255,np.uint8)
+    result=exclude_navigation_image_bottom({"road":source},.18)["road"]
+    assert np.all(result[:82]==255) and np.all(result[82:]==0)
+    assert np.all(source==255)
+
+@pytest.mark.parametrize("ratio",(-.1,1.0,1.2))
+def test_invalid_hood_exclusion_rejected(ratio):
+    with pytest.raises(ValueError):
+        exclude_navigation_image_bottom({"road":np.zeros((10,10),np.uint8)},ratio)
+
 def test_lane_component_filter_removes_tiny_and_wide_shallow_blobs():
     mask=np.zeros((120,200),np.uint8)
     mask[10:14,10:150]=255

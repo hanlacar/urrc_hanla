@@ -23,10 +23,18 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("use_internal_cmd_mux", default_value="false"),
         DeclareLaunchArgument("initial_control_mode", default_value="IDLE"),
-        LogInfo(msg=("13-section camera/Depth/IMU mission decision enabled. "
+        DeclareLaunchArgument(
+            "vehicle_speed_topic", default_value="/vehicle/speed_mps"),
+        DeclareLaunchArgument(
+            "vehicle_speed_valid_topic", default_value="/vehicle/speed_valid"),
+        LogInfo(msg=("11-section camera/Depth/IMU mission decision enabled. "
                      "This launch does not arm or start the Arduino bridge.")),
         include("race_control", "camera_pure_pursuit.launch.py", {"commanded_speed_mps": "0.0"}),
-        include("race_control", "course_mission.launch.py"),
+        include("race_control", "course_mission.launch.py", {
+            "vehicle_speed_topic": LaunchConfiguration("vehicle_speed_topic"),
+            "vehicle_speed_valid_topic": LaunchConfiguration(
+                "vehicle_speed_valid_topic"),
+        }),
         Node(
             package="race_vehicle_interface",
             executable="cmd_mux_node",
