@@ -1,70 +1,60 @@
-"""Bring up perception, mission decision, control, and the MCU bridge.
+"""Run the complete real-vehicle stack on one computer.
 
-The Arduino bridge starts disarmed and auto-arms once after MCU feedback and
-both command topics remain fresh for the configured stability interval.
+This combines camera autonomy with the current T870_MCU manager and bridge.
+The legacy cmd_mux and Arduino bridge are intentionally not started, so there
+is exactly one command arbiter and one owner of the serial port.
 """
 
-import os
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            LogInfo)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    control_share = get_package_share_directory("race_control")
-    vehicle_share = get_package_share_directory("race_vehicle_interface")
+    control_share = Path(get_package_share_directory("race_control"))
+    mcu_share = Path(get_package_share_directory("t870_mcu"))
 
-    autonomy = IncludeLaunchDescription(
+    ros_domain_id = LaunchConfiguration("ros_domain_id")
+    mcu_port = LaunchConfiguration("mcu_port")
+
+    camera_autonomy = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(control_share, "launch", "course_autonomy.launch.py")
+            str(control_share / "launch" / "mcu_ws_autonomy.launch.py")
+        ),
+        launch_arguments={"ros_domain_id": ros_domain_id}.items(),
+    )
+
+    t870_mcu = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            str(mcu_share / "launch" / "t870_mcu.launch.py")
         ),
         launch_arguments={
-            "use_internal_cmd_mux": "true",
-            "initial_control_mode": "NORMAL",
+            "ros_domain_id": ros_domain_id,
+            "port": mcu_port,
+            "bridge": "true",
+            "manager": "true",
         }.items(),
     )
-    bridge = Node(
-        package="race_vehicle_interface",
-        executable="arduino_serial_bridge_node",
-        name="arduino_serial_bridge_node",
-        output="screen",
-        parameters=[
-            os.path.join(vehicle_share, "config", "arduino_bridge.yaml"),
-            {
-                "port": LaunchConfiguration("arduino_port"),
-                "allow_transmit": True,
-                "maximum_abs_stage": LaunchConfiguration("maximum_abs_stage"),
-                "maximum_steering_deg": 27.0,
-                "require_fresh_feedback": True,
-                "startup_straight_duration_sec": 0.0,
-                "startup_straight_stage": 2,
-                "startup_auto_center_enabled": False,
-                "auto_arm_when_ready": LaunchConfiguration("auto_arm"),
-                "auto_arm_stable_sec": 1.0,
-            },
-        ],
-    )
+
     return LaunchDescription([
         DeclareLaunchArgument(
-            "arduino_port",
-            default_value=(
-                "/dev/serial/by-id/"
-                "usb-Arduino__www.arduino.cc__0042_14533303731351115201-if00"
-            ),
+            "ros_domain_id",
+            default_value="10",
+            description="DDS domain shared by autonomy and T870 MCU nodes",
         ),
-        DeclareLaunchArgument("maximum_abs_stage", default_value="3"),
-        DeclareLaunchArgument("auto_arm", default_value="true"),
+        DeclareLaunchArgument(
+            "mcu_port",
+            default_value="auto",
+            description="T870 serial port, for example /dev/ttyUSB0",
+        ),
         LogInfo(msg=(
-            "FULL VEHICLE AUTONOMY: camera/Depth/YOLO, IMU, metric path, "
-            "Pure Pursuit, 11-section decision, encoder feedback and MCU bridge. "
-            "Arduino command TX auto-arms into normal perception/path control; "
-            "the failing startup straight auto-center routine is disabled."
+            "FULL VEHICLE (single PC): D456 RGB/IMU, TensorRT YOLO, BEV path, "
+            "Pure Pursuit, 11-section mission, T870 manager and T870 bridge."
         )),
-        autonomy,
-        bridge,
+        camera_autonomy,
+        t870_mcu,
     ])

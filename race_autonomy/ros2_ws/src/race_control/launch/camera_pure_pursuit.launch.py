@@ -35,6 +35,7 @@ def generate_launch_description():
             "input_height": "480",
             "inference_fps": "40.0",
             "detections_image_fps": "30.0",
+            "navigation_bottom_exclusion_ratio": "0.0",
             "expected_image_width": "640",
             "expected_image_height": "480",
             "device": "cuda:0",
@@ -69,6 +70,7 @@ def generate_launch_description():
                 "nav_path_valid_topic": "/camera/path_valid",
                 "nav_path_confidence_topic": "/camera/path_confidence",
                 "nav_path_lateral_to_right_sign": -1.0,
+                "speed_feedback_topic": LaunchConfiguration("speed_feedback_topic"),
                 "commanded_speed_mps": LaunchConfiguration("commanded_speed_mps"),
             },
         ],
@@ -92,6 +94,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("commanded_speed_mps",default_value="0.0",description="Pure Pursuit target speed; default is propulsion locked"),
+        DeclareLaunchArgument("speed_feedback_topic",default_value="/vehicle/speed_mps",description="Measured speed topic for dynamic lookahead"),
         LogInfo(msg="Camera + IMU + YOLO + metric path + Pure Pursuit; vehicle actuation is not launched"),
         camera,
         imu_pitch,

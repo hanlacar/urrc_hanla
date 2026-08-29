@@ -29,7 +29,10 @@ def generate_launch_description():
             "vehicle_speed_valid_topic", default_value="/vehicle/speed_valid"),
         LogInfo(msg=("11-section camera/Depth/IMU mission decision enabled. "
                      "This launch does not arm or start the Arduino bridge.")),
-        include("race_control", "camera_pure_pursuit.launch.py", {"commanded_speed_mps": "0.0"}),
+        include("race_control", "camera_pure_pursuit.launch.py", {
+            "commanded_speed_mps": "0.0",
+            "speed_feedback_topic": LaunchConfiguration("vehicle_speed_topic"),
+        }),
         include("race_control", "course_mission.launch.py", {
             "vehicle_speed_topic": LaunchConfiguration("vehicle_speed_topic"),
             "vehicle_speed_valid_topic": LaunchConfiguration(

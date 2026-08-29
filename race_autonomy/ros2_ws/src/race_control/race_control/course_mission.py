@@ -7,6 +7,24 @@ LEFT, STRAIGHT, RIGHT = -1, 0, 1
 CAMERA = 1
 INTERSECTIONS = {4, 6, 8}
 
+EMERGENCY_SAFE_STOP_PREFIXES = (
+    "SAFE_STOP:INPUT_STREAM_LOST",
+)
+
+
+def camera_emergency_stop(status, control_was_active):
+    """Separate a true run-time control failure from an ordinary stage-0 stop.
+
+    Before the vehicle has moved, missing perception is a normal disarmed wait.
+    A path or speed-plan rejection already commands drive stage zero at 20 Hz,
+    so it must not repeatedly pulse the MCU emergency brake. Only an explicit
+    loss of the guarded input stream after motion uses the independent hard-
+    stop channel. Traffic lights, stop lines and curvature stops are also
+    ordinary drive-stage zero commands.
+    """
+    return bool(control_was_active) and str(status).startswith(
+        EMERGENCY_SAFE_STOP_PREFIXES)
+
 
 def section_after_ramp_detection(section, imu_valid, pitch_deg,
                                  ramp_pitch_deg=5.0):

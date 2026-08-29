@@ -21,7 +21,9 @@ camera_path_planner_node:
     lane_mode_hold_timeout_sec: 2.00
     turn_progress_timeout_sec: 3.0
     min_turn_radius_m: 1.2
-    bev_forward_min_m: 0.3
+    # Path projection keeps a small near-field floor. This setting does not
+    # crop or restrict YOLO object detection.
+    bev_forward_min_m: 0.1
     bev_forward_max_m: 6.0
     # Symmetric lateral BEV bounds selected from the active mission section.
     bev_normal_lateral_m: 1.2

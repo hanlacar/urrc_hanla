@@ -33,7 +33,21 @@ from .imu_filter import (
 )
 
 
-KNOWN_MODES = {"IDLE", "NORMAL", "PARALLEL_PARK", "T_PARK", "SLOPE"}
+KNOWN_MODES = {
+    "IDLE",
+    "NORMAL",
+    "START",
+    "SLOPE",
+    "CRANK",
+    "INTERSECTION_1",
+    "S_COURSE",
+    "INTERSECTION_2",
+    "T_PARK",
+    "INTERSECTION_3",
+    "ACCELERATION",
+    "PARALLEL_PARK",
+    "FINISH",
+}
 
 
 def manager_transform_vector(raw_vector, axis_matrix, mounting_rpy_deg):

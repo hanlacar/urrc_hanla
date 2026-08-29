@@ -9,7 +9,11 @@ from nav_msgs.msg import Path
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, Int8, Int32, String
 
-from .course_mission import CourseMission, MissionInput
+from .course_mission import (
+    CourseMission,
+    MissionInput,
+    camera_emergency_stop,
+)
 from .path_stability import path_jump_metrics, path_spatial_quality
 
 
@@ -81,6 +85,7 @@ class CourseMissionNode(Node):
         self.path_spatial_quality = 0.0
         self.path_jump_m = 0.0
         self.path_jump_detected = False
+        self.control_was_active = False
         self.updated = {}
         self.active_section_pub = self.create_publisher(
             Int8, "/mission/active_section", 10)
@@ -275,12 +280,18 @@ class CourseMissionNode(Node):
         self.active_section_pub.publish(Int8(data=int(self.data.section)))
         self.vehicle_mode_pub.publish(String(data=self.SECTION_TO_VEHICLE_MODE.get(
             int(self.data.section), "IDLE")))
+        emergency_stop = camera_emergency_stop(
+            output.status, self.control_was_active)
+        if output.stage > 0:
+            self.control_was_active = True
+
         self.camera_drive_pub.publish(Float32(data=float(output.stage)))
         self.camera_wheel_pub.publish(
             Int32(data=int(round(output.steering_deg))))
-        # The external MCU manager treats this as an independent safety input.
-        # Publish it every control cycle so a stale stop cannot remain latched.
-        self.camera_stop_pub.publish(Bool(data=bool(output.stage == 0)))
+        # /camera_stop is the MCU's independent hard-stop channel. Ordinary
+        # traffic-light, stop-line and curvature stops use drive stage zero;
+        # only an explicit guarded input-stream loss after motion asserts it.
+        self.camera_stop_pub.publish(Bool(data=emergency_stop))
         self.turn_pub.publish(Int8(data=output.turn_direction))
         self.mode_pub.publish(Int8(data=output.control_mode))
         self.status_pub.publish(String(data=output.status))

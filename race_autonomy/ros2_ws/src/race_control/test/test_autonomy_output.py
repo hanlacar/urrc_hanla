@@ -33,7 +33,8 @@ def test_course_manager_publishes_external_mcu_camera_interface():
     assert '"/camera_drive"' in text
     assert '"/camera_wheel"' in text
     assert '"/camera_stop"' in text
-    assert "Bool(data=bool(output.stage == 0))" in text
+    assert "camera_emergency_stop(" in text
+    assert "Bool(data=emergency_stop)" in text
     assert '"/vehicle_mode"' in text
     assert '1: "START"' in text
     assert '11: "FINISH"' in text

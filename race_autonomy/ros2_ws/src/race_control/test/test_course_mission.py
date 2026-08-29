@@ -1,7 +1,11 @@
 import pytest
 
 from race_control.course_mission import (
-    CAMERA, CourseMission as _CourseMission, MissionInput, section_after_ramp_detection,
+    CAMERA,
+    CourseMission as _CourseMission,
+    MissionInput,
+    camera_emergency_stop,
+    section_after_ramp_detection,
     traffic20_drive_stage,
 )
 CourseMission = _CourseMission
@@ -11,6 +15,24 @@ def data(section, now=0.0, **kwargs):
     values = dict(section=section, now=now, camera_path_valid=True, camera_steering_deg=4.0)
     values.update(kwargs)
     return MissionInput(**values)
+
+
+def test_camera_hard_stop_is_only_for_failure_after_motion():
+    status = "SAFE_STOP:INPUT_STREAM_LOST"
+    assert not camera_emergency_stop(status, control_was_active=False)
+    assert camera_emergency_stop(status, control_was_active=True)
+
+
+def test_ordinary_stage_zero_reasons_do_not_assert_camera_hard_stop():
+    for status in (
+        "INTERSECTION_RED_STOP_AT_2M",
+        "FINISH_RED_STOP_AT_1M",
+        "RAMP:ALIGN_WHEELS",
+        "CURVATURE_STOP:START",
+        "SAFE_STOP:CAMERA_PATH_INVALID",
+        "SAFE_STOP:SPEED_PLAN_INVALID",
+    ):
+        assert not camera_emergency_stop(status, control_was_active=True)
 
 
 def test_valid_five_degree_pitch_transitions_start_to_ramp_only():

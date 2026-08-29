@@ -21,7 +21,7 @@ class UltralyticsSegmentationBackend:
         masks=result.masks.data.detach().cpu().numpy();classes=result.boxes.cls.detach().cpu().numpy().astype(int);confidences=result.boxes.conf.detach().cpu().numpy();boxes=result.boxes.xyxy.detach().cpu().numpy()
         return [{"class_id":int(class_id),"confidence":float(confidence),"xyxy":[float(v) for v in box],"mask":mask} for class_id,confidence,box,mask in zip(classes,confidences,boxes,masks)]
     def infer_navigation(self,image,role_class_ids,mask_threshold=.5,
-                         role_confidences=None):
+                         role_confidences=None,role_mask_thresholds=None):
         """Merge, resize and threshold navigation masks on GPU."""
         if self.model is None:raise RuntimeError("model not loaded")
         result=self.model.predict(source=image,imgsz=self.input_size,conf=self.confidence,device=self.device,verbose=False)[0]
@@ -51,6 +51,7 @@ class UltralyticsSegmentationBackend:
         merged_tensor=torch.zeros((len(roles),*output_shape),dtype=torch.uint8,
                                   device=mask_tensor.device)
         role_confidences=role_confidences or {}
+        role_mask_thresholds=role_mask_thresholds or {}
         for output_index,role in enumerate(roles):
             class_ids=role_class_ids[role]
             ids=tuple(int(value) for value in class_ids)
@@ -63,9 +64,42 @@ class UltralyticsSegmentationBackend:
                 if tuple(role_mask.shape)!=output_shape:
                     import torch.nn.functional as functional
                     role_mask=functional.interpolate(role_mask[None,None],size=output_shape,mode="bilinear",align_corners=False)[0,0]
-                merged_tensor[output_index].copy_((role_mask>=float(mask_threshold)).to(dtype=torch.uint8).mul_(255))
-        merged_cpu=merged_tensor.detach().cpu().numpy()
-        merged={role:merged_cpu[index] for index,role in enumerate(roles)}
+                role_mask_threshold=float(
+                    role_mask_thresholds.get(role,mask_threshold))
+                merged_tensor[output_index].copy_(
+                    (role_mask>=role_mask_threshold).to(
+                        dtype=torch.uint8).mul_(255))
+        # Navigation classes are already represented by the three merged
+        # masks above.  Preserve segmentation masks for every other detected
+        # object so the diagnostic image can show the actual detected shape,
+        # not only a bounding box.  Copy only those masks in one batch to keep
+        # the TensorRT/CUDA hot path reasonably small.
+        navigation_ids=set()
+        for role,ids in role_class_ids.items():
+            if role in {"road","white_line","yellow_line"}:
+                navigation_ids.update(int(value) for value in ids)
+        object_indices=[index for index,class_id in enumerate(classes)
+                        if int(class_id) not in navigation_ids]
+        object_masks=None
+        if object_indices:
+            object_masks=mask_tensor[object_indices]
+            if tuple(object_masks.shape[-2:])!=output_shape:
+                import torch.nn.functional as functional
+                object_masks=functional.interpolate(
+                    object_masks[:,None],size=output_shape,mode="bilinear",
+                    align_corners=False)[:,0]
+            object_masks=(object_masks>=float(mask_threshold)).to(
+                dtype=torch.uint8).mul_(255)
+        # One device-to-host transfer contains both navigation output and the
+        # optional diagnostic object masks.
+        combined_tensor=(merged_tensor if object_masks is None else
+                         torch.cat((merged_tensor,object_masks),dim=0))
+        combined_cpu=combined_tensor.detach().cpu().numpy()
+        merged={role:combined_cpu[index] for index,role in enumerate(roles)}
+        if object_masks is not None:
+            object_masks_cpu=combined_cpu[len(roles):]
+            for instance_index,object_mask in zip(object_indices,object_masks_cpu):
+                instances[instance_index]["mask"]=object_mask
         return instances,merged
     def warmup(self):
         self.infer(np.zeros((480,640,3),np.uint8))

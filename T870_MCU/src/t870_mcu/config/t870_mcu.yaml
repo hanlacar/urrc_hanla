@@ -112,10 +112,8 @@ mcu_bridge:
     # 최상위 이름이라 다른 팀과 충돌할 수 있다. 기본 false 유지.
     publish_legacy_names: false
 
-    # 2026-08-26 실측: 10m ×3회, 평균 533.1 (편차 15.2%)
-    # 1카운트 = 1.9mm, 바퀴 1회전 = 436카운트 (둘레 0.817m)
-    # ⚠ 편차가 커서 재측정 권장. 값이 바뀌면 여기만 고치면 된다.
-    # 2026-08-28 vehicle measurement: 543 encoder counts per metre.
+    # Competition calibration selected on 2026-08-29.
+    # 543 counts/m means one encoder count is approximately 1.842 mm.
     counts_per_meter: 543.0
     # Physical rear-axle to front-axle distance.
     wheelbase_m: 0.77

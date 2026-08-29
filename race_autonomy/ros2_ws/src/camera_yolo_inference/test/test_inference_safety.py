@@ -21,4 +21,4 @@ def test_navigation_masks_use_one_device_to_host_copy():
     text=(Path(__file__).parents[1]/"camera_yolo_inference"/"inference_backend.py").read_text()
     section=text[text.index("def infer_navigation"):text.index("def warmup")]
     assert section.count(".cpu().numpy()") == 2  # box metadata + all masks
-    assert "merged_tensor.detach().cpu().numpy()" in section
+    assert "combined_tensor.detach().cpu().numpy()" in section

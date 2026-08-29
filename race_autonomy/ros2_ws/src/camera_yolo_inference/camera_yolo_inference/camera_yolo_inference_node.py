@@ -31,7 +31,7 @@ class CameraYoloInferenceNode(Node):
         self.input_frame_times=deque(maxlen=240);self.output_frame_times=deque(maxlen=120)
         self.input_callbacks=MutuallyExclusiveCallbackGroup();self.inference_callbacks=MutuallyExclusiveCallbackGroup();self.visualization_callbacks=MutuallyExclusiveCallbackGroup()
         # use_sim_time is declared by rclpy itself and must not be redeclared.
-        defaults={"segmentation_model_path":"","class_manifest_path":"","device":"cpu","input_width":640,"input_height":480,"inference_fps":40.0,"detections_image_fps":30.0,"confidence_threshold":.25,"mask_threshold":.5,"road_confidence_threshold":.40,"lane_confidence_threshold":.60,"lane_minimum_component_area":80,"lane_maximum_horizontal_ratio":4.0,"lane_minimum_horizontal_width":80,"navigation_bottom_exclusion_ratio":0.,"max_image_age_sec":.2,"max_inference_latency_ms":40.,"input_image_topic":"/camera/image_raw","input_camera_info_topic":"/camera/camera_info","expected_image_width":640,"expected_image_height":480,"stop_detected_topic":"/perception/stop_detected","stop_confidence_threshold":.25,"traffic20_confidence_threshold":.25,"publish_diagnostics":True,"require_cuda":False,"camera_x_m":.245,"camera_y_m":0.,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.,"path_overlay_timeout_sec":.5,"bev_forward_min_m":.3,"bev_forward_max_m":6.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.,"min_lookahead_m":.5,"max_lookahead_m":2.,"lookahead_speed_gain":.5}
+        defaults={"segmentation_model_path":"","class_manifest_path":"","device":"cpu","input_width":640,"input_height":480,"inference_fps":40.0,"detections_image_fps":30.0,"confidence_threshold":.25,"mask_threshold":.5,"road_mask_threshold":.30,"lane_mask_threshold":.45,"road_confidence_threshold":.25,"lane_confidence_threshold":.50,"lane_minimum_component_area":80,"lane_maximum_horizontal_ratio":4.0,"lane_minimum_horizontal_width":80,"navigation_bottom_exclusion_ratio":0.,"max_image_age_sec":.2,"max_inference_latency_ms":40.,"input_image_topic":"/camera/image_raw","input_camera_info_topic":"/camera/camera_info","expected_image_width":640,"expected_image_height":480,"stop_detected_topic":"/perception/stop_detected","stop_confidence_threshold":.25,"traffic20_confidence_threshold":.25,"publish_diagnostics":True,"require_cuda":False,"camera_x_m":.245,"camera_y_m":0.,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.,"path_overlay_timeout_sec":.5,"bev_forward_min_m":.3,"bev_forward_max_m":6.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.,"min_lookahead_m":.5,"max_lookahead_m":2.,"lookahead_speed_gain":.5}
         for key,value in defaults.items():self.declare_parameter(key,value)
         output_qos=QoSProfile(history=QoSHistoryPolicy.KEEP_LAST,depth=1,reliability=QoSReliabilityPolicy.RELIABLE)
         self.mask_pubs={role:self.create_publisher(Image,f"/camera/{topic}",qos_profile_sensor_data) for role,topic in (("road","road_mask"),("white_line","white_line_mask"),("yellow_line","yellow_line_mask"))}
@@ -109,6 +109,17 @@ class CameraYoloInferenceNode(Node):
         for role,mask in masks.items():
             selected=mask>0
             if np.any(selected):output[selected]=role_colors[role]
+        # Draw the segmentation shape of every non-navigation object over the
+        # complete camera frame.  Blend with the source image so small traffic
+        # lights and stop markings remain visually identifiable in RQT.
+        for instance in instances:
+            class_id=int(instance["class_id"]);mask=instance.get("mask")
+            if mask is None:continue
+            selected=np.asarray(mask)>0
+            if not np.any(selected):continue
+            color=np.asarray(colors[class_id%len(colors)],dtype=np.float32)
+            source=output[selected].astype(np.float32)
+            output[selected]=np.clip(source*.45+color*.55,0,255).astype(np.uint8)
         for instance in instances:
             class_id=int(instance["class_id"]);color=colors[class_id%len(colors)];name=names.get(class_id,str(class_id)) if isinstance(names,dict) else names[class_id]
             if class_id in self.navigation_class_ids:
@@ -189,7 +200,8 @@ class CameraYoloInferenceNode(Node):
         try:
             bgr=image_to_bgr8(image)
             role_confidences={"road":self.p("road_confidence_threshold"),"white_line":self.p("lane_confidence_threshold"),"yellow_line":self.p("lane_confidence_threshold")}
-            instances,masks=self.backend.infer_navigation(bgr,self.inference_role_class_ids,self.p("mask_threshold"),role_confidences)
+            role_mask_thresholds={"road":self.p("road_mask_threshold"),"white_line":self.p("lane_mask_threshold"),"yellow_line":self.p("lane_mask_threshold")}
+            instances,masks=self.backend.infer_navigation(bgr,self.inference_role_class_ids,self.p("mask_threshold"),role_confidences,role_mask_thresholds)
             words_mask=masks.pop("words",np.zeros_like(masks["road"]))
             masks["road"]=restore_road_surface_words(
                 masks["road"],words_mask,proximity_pixels=20)

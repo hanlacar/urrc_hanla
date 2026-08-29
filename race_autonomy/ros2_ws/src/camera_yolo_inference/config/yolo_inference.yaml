@@ -9,16 +9,24 @@ camera_yolo_inference_node:
     detections_image_fps: 30.0
     confidence_threshold: 0.25
     mask_threshold: 0.50
+    # The close road surface can have a softer mask edge than distant road.
+    # Use a road-only threshold so the lower image remains drivable without
+    # making lane masks excessively thick.
+    road_mask_threshold: 0.30
+    lane_mask_threshold: 0.45
     # Navigation masks use stricter class-specific confidence gates while
     # traffic lights and stop signs retain the detector-level 0.25 gate.
-    road_confidence_threshold: 0.40
-    lane_confidence_threshold: 0.60
+    road_confidence_threshold: 0.25
+    lane_confidence_threshold: 0.50
     lane_minimum_component_area: 80
     lane_maximum_horizontal_ratio: 4.0
     lane_minimum_horizontal_width: 80
-    # Production default: no fixed hood crop. Offline video launch overrides
-    # this to 0.18 for the recorded vehicle-front obstruction.
+    # No fixed hood crop: navigation uses the complete 640x480 image.
     navigation_bottom_exclusion_ratio: 0.0
+    # This only controls the path overlay, not YOLO object detection. YOLO
+    # always receives the complete 640x480 frame.
+    bev_forward_min_m: 0.1
+    bev_forward_max_m: 6.0
     # Measured D456 lens centre relative to rear-axle base_link.
     camera_x_m: 0.38
     camera_y_m: 0.0

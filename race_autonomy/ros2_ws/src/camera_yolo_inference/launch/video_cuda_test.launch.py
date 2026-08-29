@@ -35,7 +35,7 @@ def generate_launch_description():
         IncludeLaunchDescription(PythonLaunchDescriptionSource(str(share/"launch"/"yolo_inference.launch.py")),
             launch_arguments={"device":"cuda:0","require_cuda":"true","input_width":"640","input_height":"480",
                               "inference_fps":"40.0","detections_image_fps":"30.0",
-                              "navigation_bottom_exclusion_ratio":"0.18",
+                              "navigation_bottom_exclusion_ratio":"0.0",
                               "expected_image_width":"640","expected_image_height":"480","max_image_age_sec":"1.0",
                               "max_inference_latency_ms":"200.0",
                               "launch_rqt":LaunchConfiguration("launch_rqt")}.items()),
@@ -51,10 +51,9 @@ def generate_launch_description():
              output="screen"),
         Node(package="race_control",executable="course_mission",
              parameters=[str(control/"config"/"course_mission.yaml"),
-                         # This recording's hood hides the nearest ~2.1 m.
-                         # Keep the production/real-car default at 1.0 m and
-                         # relax only this offline video-quality experiment.
-                         {"path_required_near_point_m":2.5,
+                         # Use the complete image and the production near-path
+                         # requirement now that no bumper/hood is visible.
+                         {"path_required_near_point_m":1.0,
                           "vehicle_speed_topic":"/mcu/speed_mps",
                           "vehicle_speed_valid_topic":"/mcu/speed_valid",
                           "input_guard_topic":"/video/frame_active",
