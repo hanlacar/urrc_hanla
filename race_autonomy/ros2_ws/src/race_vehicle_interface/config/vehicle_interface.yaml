@@ -21,7 +21,7 @@ vehicle_interface_node:
     # T870 v29 measured calibration:
     # ROS stage 1 -> firmware 2.00, PWM 50  -> 0.229 m/s
     # ROS stage 2 -> firmware 3.00, PWM 100 -> 0.526 m/s
-    # ROS stage 3 -> firmware 4.00, PWM 150 -> not measured yet.
+    # ROS stage 3 -> firmware 4.00, PWM 150 -> 0.900 m/s.
     # 2 / 0.526 provides the linear fallback used by this optional adapter.
     # allow_actuation remains false, so this calibration does not unlock motion.
     maximum_abs_stage: 3

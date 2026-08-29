@@ -44,6 +44,20 @@ camera_path_planner_node:
     path_spatial_filter_window: 7
     path_new_frame_weight: 0.20
     path_maximum_frame_shift_m: 0.04
+    # Composite confidence policy. High accepts the normal filtered path;
+    # medium blends much more strongly with the previous path; low rejects the
+    # new candidate and holds the last trusted path briefly before stopping.
+    confidence_high_threshold: 0.70
+    confidence_low_threshold: 0.40
+    low_confidence_hold_sec: 0.50
+    medium_confidence_new_frame_weight: 0.08
+    medium_confidence_maximum_shift_m: 0.02
+    confidence_desired_path_span_m: 3.0
+    # Candidate validator runs after mode hysteresis and before history update.
+    validator_maximum_path_shift_m: 0.25
+    validator_maximum_curvature_per_m: 1.0
+    validator_minimum_path_span_m: 1.0
+    validator_rejected_confidence_cap: 0.35
     # RQT BEV/ROI/path overlay; kept below control frequency to limit CPU use.
     debug_image_fps: 10.0
 camera_path_controller_node:
@@ -55,13 +69,13 @@ camera_path_controller_node:
     front_overhang_m: 0.26
     rear_overhang_m: 0.26
     wheelbase_m: 0.77
-    min_lookahead_m: 0.5
-    max_lookahead_m: 2.0
-    lookahead_speed_gain: 0.5
+    min_lookahead_m: 0.8
+    max_lookahead_m: 1.5
+    lookahead_speed_gain: 1.0
     max_steering_deg: 27.0
     steering_rate_limit_deg_s: 60.0
-    # Match the measured T870 v29 discrete drive speeds. Stage 3/PWM 150
-    # remains unused here until its physical speed is measured.
+    # Match the T870 v29 discrete drive speeds. Stage 3/PWM 150 is 0.900 m/s
+    # and is selected explicitly by the section-9 traffic20 mission logic.
     normal_speed_mps: 0.526
     turn_speed_mps: 0.229
     single_boundary_speed_mps: 0.526

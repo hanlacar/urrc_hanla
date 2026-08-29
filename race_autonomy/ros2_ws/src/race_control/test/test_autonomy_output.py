@@ -45,3 +45,11 @@ def test_external_mcu_launch_does_not_start_a_local_bridge():
     assert '"use_internal_cmd_mux": "false"' in text
     assert '"vehicle_speed_topic": "/mcu/speed_mps"' in text
     assert "arduino_serial_bridge_node" not in text
+
+
+def test_path_accuracy_uses_evidence_based_path_confidence():
+    text=(Path(__file__).parents[1]/"race_control"/
+          "course_mission_node.py").read_text()
+    assert '"/camera/path_confidence"' in text
+    assert "self.path_accuracy = self.path_confidence" in text
+    assert "self.path_temporal_stability * spatial" not in text

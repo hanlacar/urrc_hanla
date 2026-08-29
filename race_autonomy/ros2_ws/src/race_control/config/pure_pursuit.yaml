@@ -14,13 +14,15 @@ pure_pursuit:
     lookahead_point_topic: "/control/lookahead_point_json"
     # Measured front-axle to rear-axle center distance.
     wheelbase_m: 0.77
-    # Calibrated camera-path tracking uses a fixed 1.5 m lookahead.
-    minimum_lookahead_m: 1.5
-    lookahead_gain_s: 0.0
+    # Dynamic lookahead: low speed reacts nearby; higher speed looks farther.
+    minimum_lookahead_m: 0.8
+    lookahead_gain_s: 1.0
     maximum_lookahead_m: 1.5
     maximum_steering_deg: 27.0
+    steering_rate_limit_deg_s: 60.0
     steering_sign: 1.0
-    minimum_confidence: 0.45
+    # Confidence gating and last-good-path hold happen in the path planner.
+    minimum_confidence: 0.0
     path_timeout_sec: 0.6
     control_rate_hz: 20.0
     commanded_speed_mps: 0.0

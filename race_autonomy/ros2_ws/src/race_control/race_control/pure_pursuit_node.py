@@ -7,7 +7,8 @@ import time
 import rclpy
 from nav_msgs.msg import Path
 from rclpy.node import Node
-from std_msgs.msg import Bool, Float32, String
+from std_msgs.msg import Bool, Float32, Int8, String
+from camera_navigation.path_generator import path_mode_name
 
 from .pure_pursuit import (
     dynamic_lookahead,
@@ -48,6 +49,7 @@ class PurePursuitNode(Node):
             "control_rate_hz": 20.0,
             "commanded_speed_mps": 0.0,
             "allow_reverse": False,
+            "steering_rate_limit_deg_s": 60.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -55,9 +57,16 @@ class PurePursuitNode(Node):
         self.confidence = 0.0
         self.path_time = None
         self.speed_mps = 0.0
+        self.observed_mode = 0
+        self.active_mode = 0
+        self.path_shift_m = 0.0
+        self.curvature = 0.0
+        self.limited_steering = 0.0
+        self.last_control_time = time.monotonic()
         self.steering_pub = self.create_publisher(Float32, self.param("steering_topic"), 10)
         self.speed_pub = self.create_publisher(Float32, self.param("target_speed_topic"), 10)
         self.status_pub = self.create_publisher(String, self.param("status_topic"), 10)
+        self.path_status_pub = self.create_publisher(String, "/control/path_status", 10)
         self.lookahead_pub = self.create_publisher(
             Float32, self.param("lookahead_topic"), 10
         )
@@ -79,6 +88,10 @@ class PurePursuitNode(Node):
             self.nav_path_valid = True
             self.create_subscription(String, self.param("path_topic"), self.on_path, 10)
         self.create_subscription(Float32, self.param("speed_feedback_topic"), self.on_speed, 10)
+        self.create_subscription(Int8, "/camera/path_observed_mode", lambda m:setattr(self,"observed_mode",int(m.data)), 10)
+        self.create_subscription(Int8, "/camera/path_mode", lambda m:setattr(self,"active_mode",int(m.data)), 10)
+        self.create_subscription(Float32, "/camera/path_jump_m", lambda m:setattr(self,"path_shift_m",float(m.data)), 10)
+        self.create_subscription(Float32, "/control/path_curvature", lambda m:setattr(self,"curvature",float(m.data)), 10)
         self.create_timer(1.0 / max(float(self.param("control_rate_hz")), 1.0), self.control)
         self.get_logger().warning("Controller ready with propulsion target locked at 0 m/s")
 
@@ -132,8 +145,15 @@ class PurePursuitNode(Node):
             float(self.param("lookahead_gain_s")), float(self.param("maximum_lookahead_m")),
         )
         target = select_lookahead_point(self.path, lookahead) if valid else None
-        steering = steering_angle_deg(target, float(self.param("wheelbase_m")), float(self.param("maximum_steering_deg")))
-        steering *= float(self.param("steering_sign"))
+        raw_steering = steering_angle_deg(target, float(self.param("wheelbase_m")), float(self.param("maximum_steering_deg")))
+        raw_steering *= float(self.param("steering_sign"))
+        now = time.monotonic()
+        dt = max(0.0, now-self.last_control_time)
+        self.last_control_time = now
+        maximum_change = float(self.param("steering_rate_limit_deg_s"))*dt
+        steering = max(self.limited_steering-maximum_change,
+                       min(raw_steering,self.limited_steering+maximum_change)) if valid else 0.0
+        self.limited_steering = steering
         configured_speed = float(self.param("commanded_speed_mps"))
         reverse_refused = configured_speed < 0.0 and not bool(self.param("allow_reverse"))
         target_speed = configured_speed if valid and not reverse_refused else 0.0
@@ -154,6 +174,17 @@ class PurePursuitNode(Node):
             "steering_deg": steering, "target_speed_mps": target_speed,
             "reverse_refused": reverse_refused,
         })))
+        self.path_status_pub.publish(String(data=json.dumps({
+            "observed_mode": path_mode_name(self.observed_mode),
+            "active_mode": path_mode_name(self.active_mode),
+            "path_valid": bool(valid),
+            "path_confidence": float(self.confidence),
+            "path_shift_m": float(self.path_shift_m),
+            "curvature": float(self.curvature),
+            "lookahead_m": float(lookahead),
+            "raw_steering_deg": float(raw_steering),
+            "limited_steering_deg": float(steering),
+        }, separators=(",", ":"))))
 
 
 def main(args=None):

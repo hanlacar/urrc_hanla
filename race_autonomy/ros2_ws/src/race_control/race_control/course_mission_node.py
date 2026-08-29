@@ -76,6 +76,7 @@ class CourseMissionNode(Node):
         self.data = MissionInput()
         self.previous_path = None
         self.path_accuracy = 0.0
+        self.path_confidence = 0.0
         self.path_temporal_stability = 0.0
         self.path_spatial_quality = 0.0
         self.path_jump_m = 0.0
@@ -122,6 +123,8 @@ class CourseMissionNode(Node):
         self.create_subscription(
             String,"/perception/final_signal_state",self.on_final_signal,10)
         self.sub(Bool, "/camera/path_valid", "camera_path_valid", bool)
+        self.create_subscription(
+            Float32, "/camera/path_confidence", self.on_path_confidence, 10)
         self.sub(Float32, "/camera/target_steering_deg", "camera_steering_deg", float)
         self.sub(Int32, "/control/curvature_drive_stage", "planned_drive_stage", int)
         self.sub(Bool, "/control/curvature_plan_valid", "speed_plan_valid", bool)
@@ -153,6 +156,7 @@ class CourseMissionNode(Node):
         if section != self.data.section:
             self.previous_path = None
             self.path_accuracy = 0.0
+            self.path_confidence = 0.0
             self.path_temporal_stability = 0.0
             self.path_spatial_quality = 0.0
             self.path_jump_m = 0.0
@@ -197,10 +201,20 @@ class CourseMissionNode(Node):
                 self.p("path_jump_forward_min_m"),
                 self.p("path_jump_forward_max_m"))
             self.path_temporal_stability = accuracy if valid else 0.0
-            self.path_accuracy = self.path_temporal_stability * spatial
+            # MCU-facing "accuracy" is the evidence-based confidence produced
+            # by the path planner. Temporal/spatial stability remain available
+            # on their dedicated diagnostic topics and must not redefine it.
+            self.path_accuracy = self.path_confidence
             self.path_jump_m = median if valid else 0.0
             self.path_jump_detected = jumped if valid else False
         self.previous_path = current
+
+    def on_path_confidence(self, msg):
+        value = float(msg.data)
+        if math.isfinite(value):
+            self.path_confidence = max(0.0, min(1.0, value))
+            self.path_accuracy = self.path_confidence
+            self.updated["path_confidence"] = time.monotonic()
 
     def on_traffic_light(self, msg):
         state = str(msg.data).strip().upper()

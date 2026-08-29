@@ -7,7 +7,10 @@ curvature_speed_planner_node:
     output_curvature_topic: /control/path_curvature
     output_valid_topic: /control/curvature_plan_valid
     output_status_topic: /control/curvature_speed_status
-    minimum_path_confidence: 0.45
+    # camera_path_planner_node already rejects/holds candidates according to
+    # confidence. Trust path_valid so a brief low-confidence hold can continue
+    # on the last verified path instead of causing stop/go oscillation.
+    minimum_path_confidence: 0.0
     path_timeout_sec: 0.5
     sample_spacing_m: 0.4
     slow_curvature_per_m: 0.25

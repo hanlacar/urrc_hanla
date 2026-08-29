@@ -41,7 +41,7 @@ from .arbitration import (
 
 
 # 실측 속도 (5m 주행 기준). 3단은 선형 외삽 추정치.
-STAGE_MPS = {1: 0.229, 2: 0.526, 3: 0.823}
+STAGE_MPS = {1: 0.229, 2: 0.526, 3: 0.900}
 
 
 class ManagerNode(Node):
