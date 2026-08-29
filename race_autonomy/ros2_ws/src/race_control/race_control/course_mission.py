@@ -27,7 +27,7 @@ def camera_emergency_stop(status, control_was_active):
 
 
 def section_after_ramp_detection(section, imu_valid, pitch_deg,
-                                 ramp_pitch_deg=5.0):
+                                 ramp_pitch_deg=15.0):
     """Latch the start section into the ramp section at the pitch threshold."""
     if int(section) == 1 and bool(imu_valid) and float(pitch_deg) >= float(ramp_pitch_deg):
         return 2
@@ -77,12 +77,12 @@ class MissionOutput:
 
 
 class CourseMission:
-    def __init__(self, ramp_pitch_deg=5.0, ramp_delay_sec=0.5,
+    def __init__(self, ramp_pitch_deg=15.0, ramp_delay_sec=0.5,
                  stop_distance_m=2.0, minimum_stop_sec=2.0,
                  ramp_level_pitch_deg=3.0, ramp_slow_pitch_deg=5.0,
                  ramp_slow_hold_sec=3.0, green_confirm_sec=2.0,
                  actual_stop_speed_mps=0.05,
-                 ramp_pitch_confirm_sec=0.3,
+                 ramp_pitch_confirm_sec=0.5,
                  stop_line_rearm_sec=0.5,
                  ramp_post_stop_drive_sec=3.0,
                  ramp_second_line_stop_sec=1.0,
@@ -225,13 +225,9 @@ class CourseMission:
                         self.ramp_second_line_go_start=data.now
                     elapsed=data.now-self.ramp_second_line_go_start
                     if elapsed < self.ramp_post_stop_drive_sec:
-                        if not data.camera_path_valid:
-                            return self.stopped(
-                                "RAMP:SECOND_STOP_LINE_PATH_INVALID",CAMERA,
-                                direction)
-                        return MissionOutput(
-                            1,float(data.camera_steering_deg),CAMERA,direction,
-                            f"RAMP:SECOND_STOP_LINE_STAGE_1_{elapsed:.1f}SEC")
+                        return self.stopped(
+                            f"RAMP:SECOND_STOP_LINE_HOLD_{elapsed:.1f}SEC",
+                            CAMERA,direction)
                     self.ramp_second_line_completed=True
                 if self.ramp_second_line_completed:
                     if not data.camera_path_valid:

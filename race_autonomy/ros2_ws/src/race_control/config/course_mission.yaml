@@ -1,11 +1,11 @@
 course_mission_node:
   ros__parameters:
-    ramp_pitch_deg: 5.0
+    ramp_pitch_deg: 15.0
     # Require a stable incline before starting the ramp maneuver.
-    ramp_pitch_confirm_sec: 0.3
+    ramp_pitch_confirm_sec: 0.5
     ramp_delay_sec: 0.5
     ramp_slow_pitch_deg: 5.0
-    # At 5 deg: align for 0.5 s, follow the camera path at stage 2 for 3 s,
+    # At 15 deg: align for 0.5 s, follow the camera path at stage 2 for 3 s,
     # then latch stage 1 until the ramp becomes level to resist rollback.
     ramp_slow_hold_sec: 3.0
     ramp_level_pitch_deg: 3.0
@@ -16,7 +16,7 @@ course_mission_node:
     actual_stop_speed_mps: 0.05
     # A line must remain absent this long before another detection is counted.
     stop_line_rearm_sec: 0.5
-    # At the second ramp line within 2 m, drive stage 1 for this duration;
+    # At the second ramp line within 2 m, remain stopped for this duration;
     # after it expires, continue camera path following at stage 2.
     ramp_post_stop_drive_sec: 3.0
     # Stop for one second before the stage-1 departure phase.

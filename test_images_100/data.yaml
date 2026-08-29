@@ -1,0 +1,17 @@
+path: /home/parkjinwoo/urrc_hanla/test_images_100
+train: images
+val: images
+test: images
+names:
+  0: road
+  1: W_line
+  2: Y_line
+  3: R_light
+  4: Y_light
+  5: G_light
+  6: Left
+  7: etc_light
+  8: stop
+  9: traffic20
+  10: C_line
+  11: words

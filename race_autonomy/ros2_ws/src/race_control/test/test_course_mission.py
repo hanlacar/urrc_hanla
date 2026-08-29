@@ -35,12 +35,12 @@ def test_ordinary_stage_zero_reasons_do_not_assert_camera_hard_stop():
         assert not camera_emergency_stop(status, control_was_active=True)
 
 
-def test_valid_five_degree_pitch_transitions_start_to_ramp_only():
-    assert section_after_ramp_detection(1, True, 4.99) == 1
-    assert section_after_ramp_detection(1, False, 5.0) == 1
-    assert section_after_ramp_detection(1, True, 5.0) == 2
-    assert section_after_ramp_detection(1, True, 8.0) == 2
-    assert section_after_ramp_detection(3, True, 8.0) == 3
+def test_valid_fifteen_degree_pitch_transitions_start_to_ramp_only():
+    assert section_after_ramp_detection(1, True, 14.99) == 1
+    assert section_after_ramp_detection(1, False, 15.0) == 1
+    assert section_after_ramp_detection(1, True, 15.0) == 2
+    assert section_after_ramp_detection(1, True, 18.0) == 2
+    assert section_after_ramp_detection(3, True, 18.0) == 3
 
 
 def test_non_ramp_camera_sections_are_limited_to_stage_one():
@@ -85,56 +85,56 @@ def test_start_ignores_all_traffic_signs_and_lights():
 
 
 def test_ramp_requires_stable_pitch_then_aligns_and_tracks_path():
-    logic=CourseMission(ramp_pitch_confirm_sec=0.3,ramp_delay_sec=0.5,
+    logic=CourseMission(ramp_pitch_confirm_sec=0.5,ramp_delay_sec=0.5,
                         ramp_slow_hold_sec=3.0)
-    waiting=logic.update(data(2,0.0,imu_valid=True,pitch_deg=5.0))
+    waiting=logic.update(data(2,0.0,imu_valid=True,pitch_deg=15.0))
     assert (waiting.stage,waiting.steering_deg)==(1,4.0)
-    aligning=logic.update(data(2,0.3,imu_valid=True,pitch_deg=5.1))
+    aligning=logic.update(data(2,0.5,imu_valid=True,pitch_deg=15.1))
     assert (aligning.stage,aligning.steering_deg)==(0,0.0)
-    stage_two=logic.update(data(2,0.8,imu_valid=True,pitch_deg=6.0,
+    stage_two=logic.update(data(2,1.0,imu_valid=True,pitch_deg=16.0,
                                 camera_steering_deg=7.0))
     assert (stage_two.stage,stage_two.steering_deg)==(2,7.0)
     assert stage_two.status=="RAMP:SLOPE_STAGE_2_PATH_HOLD_3SEC"
-    stage_one=logic.update(data(2,3.8,imu_valid=True,pitch_deg=6.0,
+    stage_one=logic.update(data(2,4.0,imu_valid=True,pitch_deg=16.0,
                                 camera_steering_deg=-4.0))
     assert (stage_one.stage,stage_one.steering_deg)==(1,-4.0)
     assert stage_one.status=="RAMP:SLOPE_STAGE_1_PATH_FOLLOW"
 
 
-def test_ramp_second_line_stops_one_second_then_runs_stage_one_three_seconds():
+def test_ramp_second_line_stops_one_second_then_holds_three_more_seconds():
     logic=CourseMission(ramp_pitch_confirm_sec=0.0,stop_line_rearm_sec=0.5)
-    first=logic.update(data(2,0.0,imu_valid=True,pitch_deg=6.0,
+    first=logic.update(data(2,0.0,imu_valid=True,pitch_deg=16.0,
                             stop_detected=True,stop_distance_valid=True,
                             stop_distance_m=1.0))
     assert first.status=="RAMP:ALIGN_WHEELS"
-    logic.update(data(2,0.1,imu_valid=True,pitch_deg=6.0))
-    logic.update(data(2,0.6,imu_valid=True,pitch_deg=6.0))
+    logic.update(data(2,0.1,imu_valid=True,pitch_deg=16.0))
+    logic.update(data(2,0.6,imu_valid=True,pitch_deg=16.0))
     approaching=logic.update(data(
-        2,0.7,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        2,0.7,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.1))
     assert approaching.stage==2
     stopped=logic.update(data(
-        2,0.8,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        2,0.8,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0,
         camera_steering_deg=-6.0))
     assert (stopped.stage,stopped.steering_deg)==(0,0.0)
     assert stopped.status=="RAMP:SECOND_STOP_LINE_STOP_0.0SEC"
     assert logic.update(data(
-        2,1.79,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        2,1.79,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0)).stage==0
-    moving=logic.update(data(
-        2,1.8,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+    holding=logic.update(data(
+        2,1.8,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0,
         camera_steering_deg=-6.0))
-    assert (moving.stage,moving.steering_deg)==(1,-6.0)
-    assert moving.status=="RAMP:SECOND_STOP_LINE_STAGE_1_0.0SEC"
-    still_moving=logic.update(data(
-        2,4.79,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+    assert (holding.stage,holding.steering_deg)==(0,0.0)
+    assert holding.status=="RAMP:SECOND_STOP_LINE_HOLD_0.0SEC"
+    still_holding=logic.update(data(
+        2,4.79,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0,speed_valid=True,
         speed_mps=0.2))
-    assert still_moving.stage==1
+    assert still_holding.stage==0
     completed=logic.update(data(
-        2,4.8,imu_valid=True,pitch_deg=6.0,stop_detected=True,
+        2,4.8,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0,speed_valid=True,
         speed_mps=0.2,camera_steering_deg=9.0))
     assert (completed.stage,completed.steering_deg)==(2,9.0)

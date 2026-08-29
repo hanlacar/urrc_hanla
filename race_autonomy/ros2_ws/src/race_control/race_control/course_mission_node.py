@@ -37,10 +37,10 @@ class CourseMissionNode(Node):
     def __init__(self):
         super().__init__("course_mission_node")
         defaults = {
-            "ramp_pitch_deg": 5.0, "ramp_delay_sec": 0.5,
+            "ramp_pitch_deg": 15.0, "ramp_delay_sec": 0.5,
             "ramp_slow_pitch_deg": 5.0, "ramp_slow_hold_sec": 3.0,
             "ramp_level_pitch_deg": 3.0,
-            "ramp_pitch_confirm_sec": 0.3,
+            "ramp_pitch_confirm_sec": 0.5,
             "stop_line_rearm_sec": 0.5,
             "ramp_post_stop_drive_sec": 3.0,
             "ramp_second_line_stop_sec": 1.0,
