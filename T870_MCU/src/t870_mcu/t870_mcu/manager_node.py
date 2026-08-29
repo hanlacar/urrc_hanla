@@ -26,9 +26,11 @@ from functools import partial
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Bool, Float32, Int32, String
 
+from .diagnostics import check_subscriptions
 from .arbitration import (
     ArbitrationStatus,
     InputManager,
@@ -41,7 +43,7 @@ from .arbitration import (
 
 
 # 실측 속도 (5m 주행 기준). 3단은 선형 외삽 추정치.
-STAGE_MPS = {1: 0.229, 2: 0.526, 3: 0.900}
+STAGE_MPS = {1: 0.229, 2: 0.526, 3: 0.823}
 
 
 class ManagerNode(Node):
@@ -63,14 +65,30 @@ class ManagerNode(Node):
         # 대회 구간 모드 문자열 화이트리스트.
         # 여기 없는 모드가 /vehicle_mode 로 오면 ERROR 를 찍고 무시한다.
         # (조용히 기본 소유자로 넘어가면 주차 구간 오타를 못 잡는다)
-        # A bare [] is inferred as BYTE_ARRAY by rclpy Jazzy and then rejects
-        # the STRING_ARRAY supplied by YAML. Keep a typed string default.
-        # An explicitly empty YAML list may still be used to disable checking.
-        self.declare_parameter("known_modes", [
-            "IDLE", "START", "SLOPE", "CRANK", "INTERSECTION_1",
-            "S_COURSE", "INTERSECTION_2", "T_PARK", "INTERSECTION_3",
-            "ACCELERATION", "PARALLEL_PARK", "FINISH", "SUDDEN_STOP",
-        ])
+        # 비워두면 검증하지 않는다.
+        #
+        # ★ 목록의 주인은 yaml 이다. 여기에 기본값을 박지 말 것.
+        #   코드와 yaml 두 곳에 같은 목록이 있으면, 구간 이름이 바뀔 때
+        #   yaml 만 고친 사람과 params-file 없이 돌린 사람이 서로 다른
+        #   목록으로 동작하게 된다. 그것도 조용히.
+        #   비어 있으면 아래에서 크게 경고한다 (0829).
+        #
+        # 🔴 [] 를 기본값으로 주면 매니저가 시작하자마자 죽는다 — 0829
+        #
+        #   rclpy 는 기본값의 "원소"를 보고 파라미터 타입을 정한다.
+        #   빈 리스트에는 원소가 없어서 BYTE_ARRAY 로 잡히고,
+        #   yaml 이 주는 STRING_ARRAY 와 충돌해 선언 단계에서 죽는다.
+        #
+        #   ★ 해결: 값 대신 **타입만** 선언한다.
+        #     (라이다팀이 Jazzy rclpy 에서 직접 확인해 준 방식.
+        #      ros2 param describe 결과가 'string array' 로 나온다)
+        #     세 팀이 각자 다르게 고쳐 사본이 갈라졌었다 → 이 방식으로 통일한다.
+        #
+        #   ⚠ 여기에 모드 목록을 박지 말 것. 목록의 주인은 yaml 하나다.
+        #     코드와 yaml 두 곳에 목록이 있으면, 구간 이름이 바뀔 때
+        #     yaml 만 고친 사람과 params-file 없이 돌린 사람이 서로 다른
+        #     목록으로 동작한다. 그것도 에러 없이 조용히.
+        self.declare_parameter("known_modes", Parameter.Type.STRING_ARRAY)
 
         # 알 수 없는 모드가 왔을 때:
         #   keep    = 직전 모드 유지 (권장. 갑자기 조향 권한이 바뀌지 않는다)
@@ -105,7 +123,7 @@ class ManagerNode(Node):
 
         # m/s → 단계 변환, Twist 변환에 사용
         self.declare_parameter("max_steer_deg", 27.0)
-        self.declare_parameter("wheelbase_m", 0.77)
+        self.declare_parameter("wheelbase_m", 0.73)
         self.declare_parameter("mps_deadband", 0.05)
 
         # ---------- 토픽 ----------
@@ -118,7 +136,8 @@ class ManagerNode(Node):
         self.declare_parameter("status_drive_source_topic", "/mcu/active_drive_source")
         self.declare_parameter("status_wheel_source_topic", "/mcu/active_wheel_source")
         self.declare_parameter("status_safety_topic", "/mcu/safety_state")
-        self.declare_parameter("status_ready_topic", "/mcu/ready")
+        # ★ "/mcu/ready" 는 브릿지가 쓴다. 이름이 겹치면 안 된다 (0829)
+        self.declare_parameter("status_ready_topic", "/mcu/manager_ready")
 
         gp = lambda n: self.get_parameter(n).value
         self.source_names = [str(v).strip() for v in gp("source_names")]
@@ -152,7 +171,16 @@ class ManagerNode(Node):
 
         self.inputs = InputManager(self.source_names)
         self.drive_sel = PrioritySelector(gp("drive_priority"), self.source_names)
-        self.known_modes = [str(m).strip().upper() for m in (gp("known_modes") or [])]
+        #  값 없이 타입만 선언했으므로, params-file 을 안 주면
+        #  get_parameter 가 예외를 던진다. 그걸로 노드를 죽이지는 않는다.
+        #  (검증만 꺼지고 아래에서 크게 경고한다)
+        try:
+            _modes_raw = gp("known_modes")
+        except Exception:
+            _modes_raw = None
+        self.known_modes = [str(m).strip().upper()
+                            for m in (_modes_raw or [])
+                            if str(m).strip()]
         self.unknown_mode_policy = str(gp("unknown_mode_policy")).strip().lower()
         if self.unknown_mode_policy not in ("keep", "default"):
             raise ValueError("unknown_mode_policy 는 keep 또는 default")
@@ -177,6 +205,11 @@ class ManagerNode(Node):
         #   wheel_type  : "int"(Int32 도) | "float"(Float32 도)
         #                 | "norm"(Float32 -1.0~+1.0)
         #   cmd_vel_topic: 비우지 않으면 Twist 를 구독해 자동 변환
+        # 진단용 구독 목록 — (토픽, 기대 타입, 라벨)
+        #  메시지가 안 오는 이유를 조용히 두지 않으려고 모아둔다.
+        self._sub_specs = []
+        self._diag_seen = set()
+
         self.src_cfg = {}
         for source in self.source_names:
             for pname, default in (
@@ -209,17 +242,25 @@ class ManagerNode(Node):
                 # Nav2 계열: /cmd_vel (Twist) 하나로 구동+조향이 같이 온다
                 self.create_subscription(
                     Twist, cv_topic, partial(self._cb_cmdvel, source), 10)
+                self._sub_specs.append(
+                    (cv_topic, "geometry_msgs/msg/Twist", "%s Twist" % source))
                 self.get_logger().info(
                     "%s: Twist 입력 %s → 자전거모델 변환" % (source, cv_topic))
             else:
                 self.create_subscription(
                     Float32, d_topic, partial(self._cb_drive, source), 10)
+                self._sub_specs.append(
+                    (d_topic, "std_msgs/msg/Float32", "%s 구동" % source))
                 if cfg["wheel_type"] == "int":
                     self.create_subscription(
                         Int32, w_topic, partial(self._cb_wheel, source), 10)
+                    self._sub_specs.append(
+                        (w_topic, "std_msgs/msg/Int32", "%s 조향" % source))
                 else:
                     self.create_subscription(
                         Float32, w_topic, partial(self._cb_wheel_f, source), 10)
+                    self._sub_specs.append(
+                        (w_topic, "std_msgs/msg/Float32", "%s 조향" % source))
                 self.get_logger().info(
                     "%s: drive=%s(%s) wheel=%s(%s)"
                     % (source, d_topic, cfg["drive_unit"],
@@ -228,9 +269,15 @@ class ManagerNode(Node):
             if source in self.stop_sources:
                 self.create_subscription(
                     Bool, s_topic, partial(self._cb_stop, source), 10)
+                self._sub_specs.append(
+                    (s_topic, "std_msgs/msg/Bool", "%s 급정거" % source))
 
-        self.create_subscription(String, str(gp("mode_topic")), self._cb_mode, 10)
-        self.create_subscription(Bool, str(gp("estop_topic")), self._cb_estop, 10)
+        _mode_t = str(gp("mode_topic"))
+        _estop_t = str(gp("estop_topic"))
+        self.create_subscription(String, _mode_t, self._cb_mode, 10)
+        self.create_subscription(Bool, _estop_t, self._cb_estop, 10)
+        self._sub_specs.append((_mode_t, "std_msgs/msg/String", "구간 모드"))
+        self._sub_specs.append((_estop_t, "std_msgs/msg/Bool", "비상정지"))
 
         # ---------- 발행 ----------
         self.pub_drive = self.create_publisher(Float32, str(gp("output_drive_topic")), 10)
@@ -246,6 +293,24 @@ class ManagerNode(Node):
         self.pub_ready = self.create_publisher(Bool, str(gp("status_ready_topic")), 10)
 
         self.timer = self.create_timer(1.0 / publish_hz, self._tick)
+
+        #  타입·QoS 불일치는 에러 없이 조용히 메시지를 삼킨다.
+        #  "저쪽은 쏘는데 나는 못 받는" 상황의 대부분이 이것이라 주기적으로 본다.
+        #  (발행자가 늦게 뜰 수 있으므로 한 번이 아니라 계속 확인한다)
+        self.diag_timer = self.create_timer(
+            3.0,
+            lambda: check_subscriptions(self, self._sub_specs, self._diag_seen))
+
+        # ★ 0829: 검증이 꺼진 채로 도는 것을 조용히 넘기지 않는다.
+        #   params-file 을 빼먹고 ros2 run 으로 띄우면 여기 걸린다.
+        if not self.known_modes:
+            self.get_logger().warn(
+                "known_modes 가 비었다 — 모드 문자열 검증이 꺼진다. "
+                "params-file 을 안 줬을 가능성이 크다. "
+                "이 상태로는 'T_PARKING' 같은 오타가 그냥 지나가고, "
+                "unknown_mode_policy=keep 이라 직전 모드가 유지된다. "
+                "→ 주차 구간에서 조향 권한이 라이다로 안 넘어간다. "
+                "실행: ros2 launch t870_mcu t870_mcu.launch.py")
 
         self.get_logger().info(
             "mcu_manager v3: 구동우선순위=%s 조향기본=%s 조향override=%s "
@@ -493,8 +558,7 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

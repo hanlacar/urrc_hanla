@@ -18,7 +18,7 @@ def generate_launch_description():
             "video_path",
             default_value=(
                 "/home/parkjinwoo/urrc_hanla/recordings/raw/"
-                "20260827_070334_from_0530.mp4"
+                "20260829_170657.mp4"
             ),
         ),
         DeclareLaunchArgument("fps",default_value="60.0"),
@@ -53,7 +53,8 @@ def generate_launch_description():
              parameters=[str(control/"config"/"course_mission.yaml"),
                          # Use the complete image and the production near-path
                          # requirement now that no bumper/hood is visible.
-                         {"path_required_near_point_m":1.0,
+                         {"initial_section":5,
+                          "path_required_near_point_m":1.0,
                           "vehicle_speed_topic":"/mcu/speed_mps",
                           "vehicle_speed_valid_topic":"/mcu/speed_valid",
                           "input_guard_topic":"/video/frame_active",

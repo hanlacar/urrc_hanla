@@ -80,6 +80,11 @@ mcu_bridge:
     reconnect_delay_s: 1.0
     telemetry_timeout_s: 2.0
     latch_on_firmware_fault: true
+
+    # /estop_lock 의 true 를 "살아있는 주장" 으로 볼 유효시간 [초].
+    # ★ 없으면 복구 불가 상태가 생긴다 — true 를 한 번 쏘고 죽은 노드 때문에
+    #   래치 해제가 영구히 거부된다. 래치 자체는 그대로고, 해제 허용 여부만 본다.
+    estop_assert_timeout_s: 1.0
     coasting_policy: "last_direction"
 
     # ---------- 발행 토픽 ----------
@@ -99,6 +104,9 @@ mcu_bridge:
     pub_topic_connected: "/mcu/connected"
     pub_topic_status: "/mcu/fw_state"
     pub_topic_raw_status: "/mcu/raw_status"
+    # STATUS 가 아닌 펌웨어 출력 (MCU_BOOT / BRAKE_OK / BRAKE_DONE / CAL_* ...)
+    # ★ 예전에는 전부 버려서, ROS 로 띄우면 제동 결과를 볼 방법이 없었다.
+    pub_topic_fw_message: "/mcu/fw_message"
     pub_topic_feedback_valid: "/mcu/telemetry_ok"
     pub_topic_fault: "/mcu/fault"
     pub_topic_fault_text: "/mcu/fault_text"
@@ -106,21 +114,88 @@ mcu_bridge:
     pub_topic_iface_status: "/mcu/iface_state"
     pub_topic_estop: "/mcu/estop_latched"
     pub_topic_hard_stop: "/mcu/hard_stop_active"
-    pub_topic_odom: "/odom"
+    # ★ 0829 변경: "/odom" → "/mcu/odom"
+    #   팀원의 mission_manager/wheel_odom 노드가 같은 "/odom" 을 발행한다.
+    #   퍼블리셔가 둘이면 메시지가 번갈아 들어와 위치가 튄다.
+    #   그쪽은 IMU yaw(/imu/relative_yaw_deg)를 쓰고 우리는 조향각 추정을
+    #   쓰는데, 우리 조향각은 아직 못 믿는다(포텐셔미터 가동범위 문제).
+    #   → /odom 의 주인은 wheel_odom 으로 넘기고 우리 것은 참고용으로 뺀다.
+    pub_topic_odom: "/mcu/odom"
 
     # 구버전 이름(/drive, /wheel, /arduino/telemetry_ok)도 같이 발행할지.
     # 최상위 이름이라 다른 팀과 충돌할 수 있다. 기본 false 유지.
     publish_legacy_names: false
 
-    # Competition calibration selected on 2026-08-29.
-    # 543 counts/m means one encoder count is approximately 1.842 mm.
-    counts_per_meter: 543.0
-    # Physical rear-axle to front-axle distance.
-    wheelbase_m: 0.77
+    # ★ 2026-08-29 재측정 — 아두이노 단독 스케치 (ROS 없이)
+    #     955 카운트 / 4.78 m (2단, 10초, 하중 실린 상태)
+    #     내부 검증: 평균속도 0.455 m/s (2단 문서값 0.526 과 정합)
+    #                정속구간 99.6 카운트/s ÷ 0.5 m/s = 199  (총합과 일치)
+    #
+    #   1카운트 = 5.01mm,  바퀴 1회전 = 163카운트 (둘레 0.817m 가정)
+    #
+    #   이전 값 533.1 은 틀렸다. odom 이 실제의 37.5% 만 보고했다
+    #   (실제 10m → odom 3.75m).
+    #
+    #   ⚠ 1회 측정이다. 2회 더 재고 잭업 회전수로 교차검증할 것.
+    #   ⚠ 하중이 크게 바뀌면 타이어 눌림이 달라져 이 값도 변한다.
+    counts_per_meter: 199.8
+    wheelbase_m: 0.73
     encoder_signed: false
     odom_frame: "odom"
     base_frame: "base_link"
-    publish_tf: true
+
+    # TF(odom -> base_link)를 이 노드가 발행할지.
+    # ★ GPS팀이나 다른 노드가 같은 TF 를 발행하면 충돌한다.
+    #   TF 트리에 같은 부모-자식 링크를 두 곳에서 쏘면 값이 번갈아 튄다.
+    #   융합 노드(robot_localization 등)를 쓸 계획이면 여기를 false 로 두고
+    #   그쪽이 TF 를 담당하게 해야 한다.
+    #
+    # ★ 0829 변경: true → false
+    #   wheel_odom 노드가 publish_tf=True 로 odom→base_footprint 를 쏘고
+    #   있다. 우리가 odom→base_link 를 같이 쏘면 odom 밑에 자식이 둘이
+    #   생겨 TF 트리가 깨진다. TF 주인을 wheel_odom 하나로 정리한다.
+    #
+    #   ⚠ 대신 base_footprint→base_link 를 누군가 반드시 발행해야 한다.
+    #     (URDF 또는 static_transform_publisher). 아무도 안 쏘면 Nav2 가
+    #     base_link 를 못 찾는다.
+    publish_tf: false
+
+    # ---------- 오도메트리 신뢰도 (공분산) ----------
+    #
+    # ★ 0828 추가. 그 전에는 covariance 가 전부 0 이었다.
+    #   0 은 "오차가 없다"는 뜻이라, EKF 로 융합하면 필터가 이 값을 절대
+    #   신뢰하고 GPS 를 무시한다. 우리 heading 은 조향각을 시간으로 추측한
+    #   값이라 가장 못 믿을 값인데 그걸 완벽하다고 선언하고 있었다.
+    #
+    # ⚠ 아래는 잠정값이다. 실측 후 조정할 것.
+    #   dist 0.15 는 counts_per_meter 실측 편차 15.2% 에서 왔다.
+    #   yaw 쪽은 조향각을 측정하지 못해 근거 없는 보수적 추정이다.
+    #
+    # 이 값으로 나오는 대략적인 불확실도:
+    #   직진 5m   위치 1σ 0.08m,  방위 1σ 0.29도
+    #   직진 20m  위치 1σ 0.25m,  방위 1σ 0.57도
+    #   90도 선회 1회  방위 1σ 6.9도,  위치 1σ 0.28m
+    odom_dist_error_ratio: 0.15     # 이동 1m 당 위치 오차 비율
+    odom_yaw_error_ratio: 0.5       # 회전 1rad 당 방위 오차 비율
+    odom_yaw_drift_per_m: 0.010     # 직진 1m 당 방위 드리프트 [rad]
+    odom_max_pos_var: 25.0          # 위치 분산 상한 [m^2] (=5m)
+    odom_max_yaw_var: 1.0           # 방위 분산 상한 [rad^2] (=1rad)
+    odom_vel_error_ratio: 0.15
+    odom_vel_error_floor: 0.02      # [m/s]
+
+    # 엔코더가 앞축(조향축)에 있어 선회 시 뒤축보다 더 돈다.
+    # d_rear = d_front x cos(조향각) 으로 환산할지.
+    #
+    # ★ 조향각은 측정값이 아니라 시간 기반 추정이다.
+    #   직진 중인데 steer_ms 가 440(27도)로 남아 있으면 cos(27도)=0.891,
+    #   즉 거리가 11% 짧게 나온다.
+    #   거리가 실제와 안 맞으면 false 로 두고 다시 재볼 것.
+    #   AS5600 으로 실제 각도를 재게 되면 true 가 정답이다.
+    odom_steer_compensation: true
+
+    # 오도메트리 원점 재설정 서비스
+    #   ros2 service call /mcu/reset_odom std_srvs/srv/Trigger '{}'
+    reset_odom_service: "/mcu/reset_odom"
 
 
 # ============================================================
@@ -134,46 +209,41 @@ mcu_manager:
     drive_priority: [lidar, camera, gps]
 
     # ========================================================
-    # 대회 구간 모드 — 2026-08-28 틀 (문자열 미확정)
+    # 대회 구간 모드 — 2026-08-29 GPS팀 이름으로 통일
     #
-    # ⚠ 아직 팀 확정 전이다. 이름이 바뀌면 known_modes 와
-    #   wheel_owner_overrides 두 곳만 고치면 된다. 코드 수정 불필요.
+    # ★ 이름의 출처는 GPS팀 경로 CSV 의 mode 열이다.
+    #   (mmission_ws/routes/**.csv — 실제 값을 전수 확인해서 맞췄다)
+    #   그쪽 gps_route_follower 가 그 값을 그대로 문자열로 발행하므로,
+    #   우리가 그 이름을 그대로 받는 것이 어긋날 여지가 가장 적다.
     #
-    # 구간 순서 (MCU 정리.txt 기준)
-    #   1  START            시작            DR + 카메라
-    #   2  SLOPE            경사로          DR + GPS + 카메라, 정지선 3초
-    #   3  CRANK            직각(굴절)코스   카메라 + GPS + DR
-    #   4  INTERSECTION_1   교차로1 직진     waypoint, 신호
-    #   5  S_COURSE         곡선코스+장애물  라이다 우선(폴백 미정)
-    #   6  INTERSECTION_2   교차로2 직진     + T자 진입 우회전(GPS)
-    #   7  T_PARK           T자주차         라이다 또는 GPS
-    #   8  INTERSECTION_3   교차로3 좌회전
-    #   9  ACCELERATION     가속구간        라이다 우회 금지
-    #   10 PARALLEL_PARK    평행주차        T자와 동일
-    #   11 FINISH           종료            신호수(?)
+    #   0828 까지 쓰던 우리 이름 → GPS팀 이름
+    #     INTERSECTION_1/2/3  →  INTERSECTION   (교차로를 번호로 안 나눈다)
+    #     CRANK               →  D_COURSE       (직각·굴절 코스)
+    #     ACCELERATION        →  ACCEL
+    #     START / FINISH      →  (없음. GPS CSV 에 그런 값이 없다)
+    #     SUDDEN_STOP         →  (없음. /<팀>_stop 으로 이미 처리된다)
     #
-    #   IDLE               시동 직후 기본값
-    #   SUDDEN_STOP        돌발 — 모드가 아니라 이벤트일 가능성이 높다.
-    #                      /<팀>_stop 으로 이미 처리되므로 모드는 예비용
+    #   IDLE 만 우리 것을 남긴다 — initial_mode 기본값이라 반드시 필요하다.
+    #
+    # ⚠ 이름이 또 바뀌면 여기와 wheel_owner_overrides 두 곳만 고친다.
+    #   코드 수정은 필요 없다.
+    #
+    # GPS팀 CSV 에서 확인된 실제 사용량
+    #   NORMAL 2154 / INTERSECTION 1729 / T_PARK 920 / D_COURSE 884
+    #   PARALLEL_PARK 839 / ACCEL 821 / S_COURSE 568 / SLOPE 109
     # ========================================================
     known_modes:
-      - "IDLE"
-      - "START"
-      - "SLOPE"
-      - "CRANK"
-      - "INTERSECTION_1"
-      - "S_COURSE"
-      - "INTERSECTION_2"
-      - "T_PARK"
-      - "INTERSECTION_3"
-      - "ACCELERATION"
-      - "PARALLEL_PARK"
-      - "FINISH"
-      - "SUDDEN_STOP"
+      - "IDLE"              # 우리 initial_mode. GPS 쪽엔 없다
+      - "NORMAL"            # 일반 주행
+      - "SLOPE"             # 경사로
+      - "D_COURSE"          # 직각·굴절 코스 (예전 이름 CRANK)
+      - "INTERSECTION"      # 교차로 (예전 이름 INTERSECTION_1/2/3)
+      - "S_COURSE"          # 곡선 + 장애물
+      - "T_PARK"            # T자 주차
+      - "ACCEL"             # 가속 구간 (예전 이름 ACCELERATION)
+      - "PARALLEL_PARK"     # 평행 주차
+      - "OUT"               # 출차. mission_modes.py 에 상수로 존재한다
 
-    # known_modes 에 없는 모드가 오면:
-    #   keep    = 직전 모드 유지 + ERROR 로그 (권장)
-    #   default = 기본 소유자로 (조용히 넘어가던 기존 동작)
     unknown_mode_policy: "keep"
 
     # ---------- 조향 권한 ----------
@@ -212,10 +282,19 @@ mcu_manager:
 
     # m/s → 단계 변환, Twist 변환용
     max_steer_deg: 27.0
-    wheelbase_m: 0.77
+    wheelbase_m: 0.73
     mps_deadband: 0.05
 
-    mode_topic: "/vehicle_mode"
+    # ★ 0829 변경: "/vehicle_mode" → "/drive_mode"
+    #
+    #   GPS팀 gps_route_follower 가 "/vehicle_mode" 를 **Int32(1~11)** 로
+    #   이미 쓰고 있다. 우리는 String 을 기대하므로 이름은 같아도
+    #   메시지가 한 개도 안 들어온다. 그런데 에러가 안 난다.
+    #
+    #   문자열 구간 이름은 그쪽이 "/drive_mode" (String) 로 따로 낸다.
+    #     gps_route_follower_node.py:359  mode_pub = create_publisher(String, drive_mode_topic)
+    #   그래서 우리가 봐야 할 토픽은 이쪽이다.
+    mode_topic: "/drive_mode"
     estop_topic: "/estop_lock"
 
     # 내부 전용. 브릿지만 구독한다. 팀은 여기 발행하지 않는다.
@@ -227,7 +306,15 @@ mcu_manager:
     status_drive_source_topic: "/mcu/active_drive_source"
     status_wheel_source_topic: "/mcu/active_wheel_source"
     status_safety_topic: "/mcu/safety_state"
-    status_ready_topic: "/mcu/ready"
+
+    # ★ 0829 변경: "/mcu/ready" → "/mcu/manager_ready"
+    #   브릿지도 pub_topic_ready 로 "/mcu/ready" 를 발행하고 있었다.
+    #   같은 이름 같은 타입(Bool)인데 뜻이 다르다.
+    #     브릿지 /mcu/ready       = 아두이노와 통신이 살아있고 READY 상태인가
+    #     매니저 /mcu/manager_ready = 중재기가 유효한 명령을 내보내고 있는가
+    #   두 노드가 한 토픽에 번갈아 쏘면 구독자는 깜빡이는 값을 본다.
+    #   에러는 안 난다. 그래서 못 잡고 있었다.
+    status_ready_topic: "/mcu/manager_ready"
 
     # ========================================================
     # 팀별 입력 — 실제 팀에서 나온 이름으로 설정

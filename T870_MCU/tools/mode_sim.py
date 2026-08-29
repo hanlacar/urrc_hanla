@@ -22,6 +22,7 @@ GPS팀이 /vehicle_mode 를 아직 안 만들었으므로, 키보드로 모드�
 """
 
 import select
+import argparse
 import sys
 import termios
 import threading
@@ -50,7 +51,11 @@ SIM_SOURCES = ["camera", "lidar", "gps"]
 
 class ModeSim(Node):
 
-    def __init__(self):
+    def __init__(self, mcu_ns="/mcu", mode_topic="/vehicle_mode",
+                 estop_topic="/estop_lock"):
+        # 토픽 이름은 전부 인자로 받는다. 코드에 박아두면 팀마다 이름이
+        # 다를 때 파일을 고쳐야 한다.
+        ns = mcu_ns.rstrip("/")
         super().__init__("mode_sim")
 
         self.mode = "IDLE"
@@ -72,23 +77,24 @@ class ModeSim(Node):
         self.last_rx = 0.0
 
         # ---- 발행 ----
-        self.pub_mode = self.create_publisher(String, "/vehicle_mode", 10)
-        self.pub_estop = self.create_publisher(Bool, "/estop_lock", 10)
+        self.pub_mode = self.create_publisher(String, mode_topic, 10)
+        self.pub_estop = self.create_publisher(Bool, estop_topic, 10)
         self.pub_d = {s: self.create_publisher(Float32, "/%s_drive" % s, 10)
                       for s in SIM_SOURCES}
         self.pub_w = {s: self.create_publisher(Int32, "/%s_wheel" % s, 10)
                       for s in SIM_SOURCES}
+        # 급정거는 라이다 하나만 시뮬레이션한다 (매니저 stop_sources 기준)
         self.pub_s = self.create_publisher(Bool, "/lidar_stop", 10)
 
         # ---- 구독 (매니저 출력) ----
-        self.create_subscription(Float32, "/mcu/cmd_drive", self._cb_d, 10)
-        self.create_subscription(Int32, "/mcu/cmd_wheel", self._cb_w, 10)
-        self.create_subscription(Bool, "/mcu/cmd_stop", self._cb_s, 10)
+        self.create_subscription(Float32, ns + "/cmd_drive", self._cb_d, 10)
+        self.create_subscription(Int32, ns + "/cmd_wheel", self._cb_w, 10)
+        self.create_subscription(Bool, ns + "/cmd_stop", self._cb_s, 10)
         self.create_subscription(
-            String, "/mcu/active_drive_source", self._cb_ads, 10)
+            String, ns + "/active_drive_source", self._cb_ads, 10)
         self.create_subscription(
-            String, "/mcu/active_wheel_source", self._cb_aws, 10)
-        self.create_subscription(String, "/mcu/safety_state", self._cb_safety, 10)
+            String, ns + "/active_wheel_source", self._cb_aws, 10)
+        self.create_subscription(String, ns + "/safety_state", self._cb_safety, 10)
 
         self.create_timer(0.1, self._publish_loop)   # 10Hz — 타임아웃 0.5s 충족
 
@@ -256,8 +262,16 @@ def handle_key(node, k):
 
 
 def main():
+    ap = argparse.ArgumentParser(
+        description="모드 전환 시뮬레이션 — 차 없이 중재 로직만 확인")
+    ap.add_argument("--mcu-ns", default="/mcu",
+                    help="MCU 발행 토픽 접두어")
+    ap.add_argument("--mode-topic", default="/vehicle_mode")
+    ap.add_argument("--estop-topic", default="/estop_lock")
+    args = ap.parse_args()
+
     rclpy.init()
-    node = ModeSim()
+    node = ModeSim(args.mcu_ns, args.mode_topic, args.estop_topic)
     node.wheel_target = "camera"
 
     threading.Thread(

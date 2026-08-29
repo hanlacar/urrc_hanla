@@ -79,6 +79,7 @@ except ImportError:
 
 import serial
 
+from .diagnostics import check_subscriptions
 from .protocol import (
     parse_drive_stage,
     drive_serial_command,
@@ -198,6 +199,19 @@ class McuBridge(Node):
         # +는 우, -는 좌.  예) 오른쪽으로 흘러가면 음수를 넣는다.
         self.declare_parameter("steer_offset_deg", 0.0)
         self.declare_parameter("latch_on_firmware_fault", True)
+
+        # /estop_lock 의 true 를 "살아있는 주장" 으로 볼 유효시간 [초].
+        #
+        # ★ 이 값이 없으면 복구 불가능한 상태가 생긴다.
+        #   래치 해제 서비스는 "지금도 /estop_lock 이 true 인가" 를 보고
+        #   막는데, 어떤 노드가 true 를 한 번 쏘고 죽어버리면 마지막 값이
+        #   영원히 true 로 남는다. → 리셋이 영구히 거부되고 브릿지를
+        #   재시작하는 것 외에 복구 수단이 없어진다.
+        #   (실제로 팀 노드를 켜자마자 E-Stop 이 걸려서 안 풀리는 일이 있었다)
+        #
+        # 여기서 막는 것은 "해제 허용 여부" 뿐이고 래치 자체는 그대로다.
+        # 0 이면 타임아웃 없음(예전 동작).
+        self.declare_parameter("estop_assert_timeout_s", 1.0)
         self.declare_parameter("reconnect_delay_s", 1.0)
         self.declare_parameter("arduino_reset_wait_s", 2.0)
 
@@ -247,6 +261,47 @@ class McuBridge(Node):
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("publish_tf", True)
 
+        # ---------- 오도메트리 신뢰도 (공분산) ----------
+        #
+        # ★ 이전에는 covariance 를 한 번도 채우지 않아 전부 0 이었다.
+        #   0 은 "오차가 없다"는 뜻이다. EKF(robot_localization 등)로 융합하면
+        #   필터가 이 값을 절대 신뢰하고 GPS 를 무시한다.
+        #   우리 heading 은 조향각을 시간으로 추측한 값이라 가장 못 믿을 값인데,
+        #   그걸 "완벽하다"고 선언하고 있었다.
+        #
+        # 오차는 이동할수록 쌓이므로 리셋 이후 누적해서 키운다.
+        #
+        # ⚠ 아래 기본값은 잠정값이다. 실측 후 조정할 것.
+        #    dist_ratio 0.15 는 counts_per_meter 실측 편차 15.2% 에서 왔다.
+        #    yaw 쪽은 조향각을 측정하지 못하므로 근거 없는 보수적 추정이다.
+
+        # 이동거리 1m 당 위치 오차 비율
+        self.declare_parameter("odom_dist_error_ratio", 0.15)
+        # 회전량 1rad 당 방위 오차 비율 (조향각이 개루프라 크게 잡는다)
+        self.declare_parameter("odom_yaw_error_ratio", 0.5)
+        # 직진 1m 당 방위 드리프트 [rad] (조향 영점 오차, 토 틀어짐 등)
+        self.declare_parameter("odom_yaw_drift_per_m", 0.010)
+        # 공분산 상한. 무한히 커지면 필터가 수치적으로 불안정해진다.
+        self.declare_parameter("odom_max_pos_var", 25.0)      # m^2  (=5m)
+        self.declare_parameter("odom_max_yaw_var", 1.0)       # rad^2 (=1rad)
+        # 속도 공분산: 비율 + 바닥값
+        self.declare_parameter("odom_vel_error_ratio", 0.15)
+        self.declare_parameter("odom_vel_error_floor", 0.02)  # m/s
+
+        # ---------- 조향 보정 ----------
+        # 엔코더가 앞축(조향축)에 있어 선회 시 뒤축보다 더 돈다.
+        # 그래서 d_rear = d_front x cos(delta) 로 환산한다.
+        #
+        # ★ 문제: delta 는 측정값이 아니라 시간 기반 추정이다.
+        #   steer_ms 가 실제와 다르면 이 보정이 오히려 거리를 왜곡한다.
+        #   예) 직진 중인데 steer_ms 가 440(27도)로 남아 있으면
+        #       cos(27도)=0.891 → 거리가 11% 짧게 나온다.
+        #
+        # 거리가 실제와 안 맞을 때 false 로 두고 다시 재보면
+        # 조향 보정이 원인인지 바로 갈린다.
+        # AS5600 으로 실제 조향각을 재게 되면 true 가 정답이다.
+        self.declare_parameter("odom_steer_compensation", True)
+
         gp = lambda name: self.get_parameter(name).value
         # port: "auto" 면 USB 장치 정보로 아두이노를 직접 찾는다.
         #       고정하려면 "/dev/ttyACM1" 처럼 경로를 직접 넣으면 된다.
@@ -287,6 +342,7 @@ class McuBridge(Node):
         self.wheel_timeout_policy = str(gp("wheel_timeout_policy")).lower()
         self.steer_offset = float(gp("steer_offset_deg"))
         self.latch_on_firmware_fault = bool(gp("latch_on_firmware_fault"))
+        self.estop_assert_timeout = float(gp("estop_assert_timeout_s"))
         self.reconnect_delay = float(gp("reconnect_delay_s"))
         self.reset_wait = float(gp("arduino_reset_wait_s"))
         self.center_on_connect = bool(gp("center_steer_on_connect"))
@@ -302,6 +358,15 @@ class McuBridge(Node):
         self.odom_frame = str(gp("odom_frame"))
         self.base_frame = str(gp("base_frame"))
         self.publish_tf = bool(gp("publish_tf"))
+        self.odom_dist_ratio = float(gp("odom_dist_error_ratio"))
+        self.odom_yaw_ratio = float(gp("odom_yaw_error_ratio"))
+        self.odom_yaw_drift = float(gp("odom_yaw_drift_per_m"))
+        self.odom_max_pos_var = float(gp("odom_max_pos_var"))
+        self.odom_max_yaw_var = float(gp("odom_max_yaw_var"))
+        self.odom_vel_ratio = float(gp("odom_vel_error_ratio"))
+        self.odom_vel_floor = float(gp("odom_vel_error_floor"))
+        self.odom_steer_comp = bool(gp("odom_steer_compensation"))
+        self._steer_range_warned = False
 
         if self.wheel_timeout_policy not in ("hold_last", "center"):
             raise ValueError("wheel_timeout_policy must be hold_last or center")
@@ -342,6 +407,9 @@ class McuBridge(Node):
         self.hard_stop_rx = 0.0         # 마지막 /mcu_stop 수신 시각
         self.hard_stop_active = False   # 실제 적용 중인지
         self.ros_estop_asserted = False
+        self.ros_estop_rx = 0.0         # 마지막 /estop_lock 수신 시각
+        self.estop_flip_count = 0       # true<->false 전환 횟수 (플래핑 감지)
+        self.estop_flip_window = 0.0
         self.estop_latched = False
         self._brake_pulse_at = None     # 마지막 제동 송신 시각 (None = 미발사)
         self.firmware_fault = 0
@@ -351,6 +419,9 @@ class McuBridge(Node):
         self.last_status_rx = 0.0
         self.telemetry_ok = False
         self._telemetry_warned = False
+        # 펌웨어 메시지 로그 폭주 방지 (초당 상한)
+        self._fw_msg_window = 0.0
+        self._fw_msg_count = 0
 
         # ---------- 오도메트리 ----------
         self.x = 0.0
@@ -360,6 +431,14 @@ class McuBridge(Node):
         self.prev_count = None
         self.prev_count_t = None
         self.last_motion_dir = 0      # 코스팅 시 사용할 직전 진행 방향
+        # 누적 공분산 (리셋 이후 이동하면서 커진다)
+        self.var_x = 0.0
+        self.var_y = 0.0
+        self.var_yaw = 0.0
+        self._tf_warned = False       # TF 실패 경고를 한 번만
+        self._odom_warned = False     # odom 실패 경고도 한 번만
+        self._last_rx_error = ""      # 같은 수신 오류를 반복해 찍지 않기 위해
+        self._last_fw_state = ""      # 펌웨어 상태 전환 감지용
 
         # ---------- ROS I/O ----------
         self.declare_parameter("input_drive_topic", "/mcu/cmd_drive")
@@ -373,9 +452,22 @@ class McuBridge(Node):
         self.sub_wheel = self.create_subscription(
             Int32, self.in_wheel_topic, self.cb_wheel, 10)
         self.declare_parameter("estop_topic", "/estop_lock")
-        _et = str(self.get_parameter("estop_topic").value)
-        self.sub_estop = self.create_subscription(Bool, _et, self.cb_estop, 10)
+        self._estop_topic_name = str(self.get_parameter("estop_topic").value)
+        self.sub_estop = self.create_subscription(
+            Bool, self._estop_topic_name, self.cb_estop, 10)
         self.sub_stop = self.create_subscription(Bool, _st, self.cb_stop, 10)
+
+        #  타입·QoS 불일치는 에러 없이 메시지를 삼킨다. 주기적으로 확인한다.
+        self._sub_specs = [
+            (self.in_drive_topic, "std_msgs/msg/Float32", "구동 명령"),
+            (self.in_wheel_topic, "std_msgs/msg/Int32", "조향 명령"),
+            (_st, "std_msgs/msg/Bool", "급정거"),
+            (self._estop_topic_name, "std_msgs/msg/Bool", "비상정지"),
+        ]
+        self._diag_seen = set()
+        self.diag_timer = self.create_timer(
+            3.0,
+            lambda: check_subscriptions(self, self._sub_specs, self._diag_seen))
 
         # ---------- 발행 토픽 (전부 파라미터) ----------
         # ★ 기본값을 전부 /mcu/ 네임스페이스로 옮겼다.
@@ -396,6 +488,7 @@ class McuBridge(Node):
             ("pub_topic_connected",   "/mcu/connected"),
             ("pub_topic_status",      "/mcu/fw_state"),
             ("pub_topic_raw_status",  "/mcu/raw_status"),
+            ("pub_topic_fw_message",  "/mcu/fw_message"),
             ("pub_topic_feedback_valid", "/mcu/telemetry_ok"),
             ("pub_topic_fault",       "/mcu/fault"),
             ("pub_topic_fault_text",  "/mcu/fault_text"),
@@ -417,6 +510,8 @@ class McuBridge(Node):
         self.pub_conn = self.create_publisher(Bool, pt("pub_topic_connected"), 10)
         self.pub_status = self.create_publisher(String, pt("pub_topic_status"), 10)
         self.pub_raw = self.create_publisher(String, pt("pub_topic_raw_status"), 10)
+        # STATUS 가 아닌 펌웨어 출력 (MCU_BOOT, BRAKE_OK, BRAKE_DONE, CAL_* ...)
+        self.pub_fw_msg = self.create_publisher(String, pt("pub_topic_fw_message"), 10)
         self.pub_fault = self.create_publisher(Int32, pt("pub_topic_fault"), 10)
         self.pub_fault_text = self.create_publisher(String, pt("pub_topic_fault_text"), 10)
         self.pub_tele_ok = self.create_publisher(
@@ -451,8 +546,17 @@ class McuBridge(Node):
         self.tf_bc = TransformBroadcaster(self) if (TF_OK and self.publish_tf) else None
 
         self.declare_parameter("reset_estop_service", "/mcu/reset_estop")
-        _rs = str(self.get_parameter("reset_estop_service").value)
-        self.reset_srv = self.create_service(Trigger, _rs, self.cb_reset_estop)
+        self._reset_service_name = str(
+            self.get_parameter("reset_estop_service").value)
+        self.reset_srv = self.create_service(
+            Trigger, self._reset_service_name, self.cb_reset_estop)
+
+        # 오도메트리 원점 재설정. 구간 시작마다 0 으로 맞추고 싶을 때 쓴다.
+        #   ros2 service call /mcu/reset_odom std_srvs/srv/Trigger '{}'
+        self.declare_parameter("reset_odom_service", "/mcu/reset_odom")
+        _os = str(self.get_parameter("reset_odom_service").value)
+        self.reset_odom_srv = self.create_service(
+            Trigger, _os, self.cb_reset_odom)
 
         self.rx_thread = threading.Thread(target=self.rx_loop, daemon=True)
         self.rx_thread.start()
@@ -522,18 +626,86 @@ class McuBridge(Node):
             self.get_logger().info("급정거 해제")
 
     def cb_estop(self, msg: Bool):
-        self.ros_estop_asserted = bool(msg.data)
+        now = time.monotonic()
+        new_state = bool(msg.data)
+        changed = (new_state != self.ros_estop_asserted)
+
+        self.ros_estop_asserted = new_state
+        self.ros_estop_rx = now
+
+        # ---- 플래핑 감지 ----
+        # true/false 를 빠르게 오가면 발행 노드가 조건을 잘못 짠 것이다.
+        # 매니저는 래치를 안 하므로 그대로 깜빡이고, 브릿지는 래치라서
+        # 첫 true 에 굳는다. 같은 신호가 두 곳에서 다르게 보여 혼란스럽다.
+        if changed:
+            if now - self.estop_flip_window > 5.0:
+                self.estop_flip_window = now
+                self.estop_flip_count = 0
+            self.estop_flip_count += 1
+            if self.estop_flip_count == 6:
+                self.get_logger().error(
+                    "%s 가 5초 안에 여러 번 뒤집혔다 — 발행 노드의 조건이 "
+                    "잘못됐을 가능성이 높다. 발행자: %s"
+                    % (self._estop_topic_name, self._estop_publishers()))
+
         if msg.data and not self.estop_latched:
-            self.get_logger().error("ROS E-STOP asserted: latch set")
+            # ★ 누가 걸었는지 남긴다.
+            #   /estop_lock 은 한 번만 true 가 와도 영구 래치라서,
+            #   "누가 쐈는지" 를 모르면 원인을 절대 못 찾는다.
+            #   실제로 팀 통합 시 "E-Stop 이 자꾸 걸린다" 는데 발행자를
+            #   특정할 수 없어 시간을 버린 적이 있다.
+            self.get_logger().error(
+                "ROS E-STOP 래치됨 (%s) — 발행자: %s"
+                % (self._estop_topic_name, self._estop_publishers()))
+            self.get_logger().error(
+                "해제: ros2 service call %s std_srvs/srv/Trigger '{}'"
+                % self._reset_service_name)
         if msg.data:
             self.estop_latched = True
         # false 는 의도적으로 래치를 풀지 않는다. /mcu/reset_estop 필요.
 
+    def _estop_publishers(self):
+        """/estop_lock 을 발행 중인 노드 이름 목록."""
+        try:
+            infos = self.get_publishers_info_by_topic(self._estop_topic_name)
+        except Exception as exc:
+            return "조회 실패(%s)" % exc
+        names = []
+        for info in infos:
+            ns = getattr(info, "node_namespace", "") or ""
+            name = getattr(info, "node_name", "?")
+            names.append((ns.rstrip("/") + "/" + name) if ns != "/" else "/" + name)
+        return ", ".join(sorted(names)) if names else "(발행자 없음 — 이미 종료된 노드)"
+
+    def _ros_estop_live(self):
+        """/estop_lock 의 true 가 "지금도 유효한 주장" 인가.
+
+        타임아웃이 지난 true 는 무시한다. 그렇지 않으면 true 를 한 번 쏘고
+        죽은 노드 때문에 래치를 영원히 못 푼다.
+        """
+        if not self.ros_estop_asserted:
+            return False
+        if self.estop_assert_timeout <= 0.0:
+            return True
+        return (time.monotonic() - self.ros_estop_rx) <= self.estop_assert_timeout
+
     def cb_reset_estop(self, _request, response):
-        if self.ros_estop_asserted:
+        if self._ros_estop_live():
             response.success = False
-            response.message = "reset denied: /estop_lock is still true"
+            response.message = (
+                "reset denied: %s 가 아직 true 다. 발행자: %s"
+                % (self._estop_topic_name, self._estop_publishers()))
+            self.get_logger().warn(response.message)
             return response
+
+        if self.ros_estop_asserted:
+            # 값은 true 인데 오래된 것 — 발행 노드가 멈췄거나 죽었다.
+            age = time.monotonic() - self.ros_estop_rx
+            self.get_logger().warn(
+                "%s 의 마지막 값이 true 지만 %.1f초 전 것이라 무시하고 해제한다 "
+                "(발행 노드가 멈춘 것으로 본다)"
+                % (self._estop_topic_name, age))
+            self.ros_estop_asserted = False
         if self.firmware_fault != 0:
             response.success = False
             response.message = "reset denied: Arduino fault=%s" % self.firmware_fault_text
@@ -543,6 +715,21 @@ class McuBridge(Node):
         self.get_logger().info("E-stop latch cleared")
         response.success = True
         response.message = "E-stop latch cleared; fresh ROS commands are still required"
+        return response
+
+    def cb_reset_odom(self, _request, response):
+        """오도메트리를 원점으로. 누적 공분산도 함께 0 으로 되돌린다."""
+        self.x = 0.0
+        self.y = 0.0
+        self.th = 0.0
+        self.distance_m = 0.0
+        self.var_x = 0.0
+        self.var_y = 0.0
+        self.var_yaw = 0.0
+        self.prev_count = None      # 다음 STATUS 를 새 기준점으로
+        self.get_logger().info("오도메트리 원점 재설정 (공분산도 초기화)")
+        response.success = True
+        response.message = "odometry reset to origin"
         return response
 
     # ============================================================
@@ -810,11 +997,22 @@ class McuBridge(Node):
                 try:
                     self.handle_line(raw.decode("utf-8", "replace").strip())
                 except Exception as exc:
-                    self.get_logger().warn("STATUS 처리 오류: %s" % exc)
+                    # 같은 오류가 초당 5회씩 쏟아지면 정작 봐야 할
+                    # [MCU] 메시지가 묻힌다. 같은 내용은 한 번만 찍는다.
+                    text = "%s: %s" % (type(exc).__name__, exc)
+                    if text != self._last_rx_error:
+                        self._last_rx_error = text
+                        self.get_logger().error("수신 처리 오류: %s" % text)
 
     def handle_line(self, line: str):
         status = parse_status(line)
         if status is None:
+            # ★ 예전에는 여기서 그냥 버렸다.
+            #   펌웨어가 내보내는 MCU_BOOT, BRAKE_OK, BRAKE_DONE, CAL_*,
+            #   FAULT 안내 등이 전부 조용히 사라졌다. 그래서 ROS 로 띄운
+            #   상태에서는 제동이 어떻게 끝났는지 볼 방법이 없었다.
+            #   (시리얼 포트는 한 프로세스만 쓸 수 있어 모니터도 못 붙인다)
+            self._emit_fw_message(line)
             return
 
         self.last_status_rx = time.monotonic()
@@ -835,6 +1033,21 @@ class McuBridge(Node):
         if self.pub_wheel_legacy:
             self.pub_wheel_legacy.publish(m)
 
+        # ★ 물리 E-Stop(D24) 은 펌웨어 state 만 ESTOP 으로 바꾸고
+        #   fault 필드는 NONE 이라 브릿지가 조용히 지나쳤다.
+        #   "차가 안 움직이는데 아무 메시지도 없다" 가 되므로 여기서 알린다.
+        #   NC 접점이라 선이 빠지거나 진동으로 순간 끊겨도 눌린 것과 같다.
+        if status["state"] != self._last_fw_state:
+            if status["state"] == "ESTOP":
+                self.get_logger().error(
+                    "펌웨어 상태 ESTOP — 물리 E-Stop 핀(D24)이 HIGH. "
+                    "버튼이 눌렸거나 배선이 끊겼다(NC 접점이라 단선도 같다). "
+                    "복구 후 시리얼로 RESET.")
+            elif self._last_fw_state == "ESTOP":
+                self.get_logger().info(
+                    "펌웨어 E-Stop 해제 → %s" % status["state"])
+            self._last_fw_state = status["state"]
+
         # 차량 인터페이스 상태 (카메라팀 규약)
         r = Bool()
         r.data = (self.conn_state == CONN_READY and not self.estop_latched
@@ -842,8 +1055,11 @@ class McuBridge(Node):
         self.pub_iface_ready.publish(r)
         s2 = String(); s2.data = status["state"]; self.pub_iface_status.publish(s2)
 
-        self.update_odom(status["encoder_count"], status["steer_ms"])
-
+        # ★ 안전 처리를 오도메트리보다 먼저 한다.
+        #   예전에는 update_odom 이 먼저였는데, 거기서 예외가 나면 아래
+        #   fault 감지가 통째로 건너뛰어졌다. TF 오타 때문에 실제로 매
+        #   STATUS 마다 그 일이 벌어지고 있었다.
+        #   안전에 관한 것은 무슨 일이 있어도 먼저 처리한다.
         if self.firmware_fault != status["fault"]:
             if status["fault"] != 0:
                 self.get_logger().error(
@@ -859,6 +1075,43 @@ class McuBridge(Node):
                 self.get_logger().error(
                     "Arduino fault=%s: E-stop 래치" % self.firmware_fault_text)
             self.estop_latched = True
+
+        # 오도메트리는 마지막. 여기서 문제가 나도 안전·구동에는 영향이 없다.
+        try:
+            self.update_odom(status["encoder_count"], status["steer_ms"])
+        except Exception as exc:
+            if not self._odom_warned:
+                self._odom_warned = True
+                self.get_logger().error(
+                    "오도메트리 계산 실패: %s — odom 없이 계속한다. "
+                    "구동·안전은 영향 없다." % exc)
+
+    def _emit_fw_message(self, line: str):
+        """STATUS 가 아닌 펌웨어 출력을 토픽으로 내보내고 로그에 찍는다.
+
+        MCU_BOOT,v33 / BRAKE_OK,MAX300 / BRAKE_DONE,STOPPED,160 같은 것들.
+        현장에서 이것 없이는 제동이 어떻게 끝났는지 알 수 없다.
+
+        펌웨어가 무언가를 폭주 출력해도 로그가 묻히지 않도록 초당 상한을 둔다.
+        토픽 발행은 막지 않는다 (ros2 topic echo 로는 다 보인다).
+        """
+        text = line.strip()
+        if not text:
+            return
+
+        m = String(); m.data = text; self.pub_fw_msg.publish(m)
+
+        now = time.monotonic()
+        if now - self._fw_msg_window >= 1.0:
+            self._fw_msg_window = now
+            self._fw_msg_count = 0
+        self._fw_msg_count += 1
+        if self._fw_msg_count <= 20:
+            self.get_logger().info("[MCU] %s" % text)
+        elif self._fw_msg_count == 21:
+            self.get_logger().warn(
+                "[MCU] 출력이 초당 20줄을 넘었다. 로그를 잠시 줄인다 "
+                "(전체는 /mcu/fw_message 에서 볼 수 있다)")
 
     # ============================================================
     # 오도메트리
@@ -905,9 +1158,19 @@ class McuBridge(Node):
         steer_deg = steer_ms / self.ms_per_deg
         steer_rad = math.radians(steer_deg)
 
+        # 조향각 추정이 물리적으로 불가능한 값이면 알린다.
+        # 시간 기반이라 어긋나면 계속 어긋난 채로 남는다.
+        if abs(steer_deg) > self.max_deg * 1.05 and not self._steer_range_warned:
+            self._steer_range_warned = True
+            self.get_logger().warn(
+                "조향각 추정치가 한계를 넘었다: %.1f도 (한계 ±%.0f도, steer_ms=%d). "
+                "시간 기반 추정이 어긋난 상태다. C(중앙 복귀) 후 다시 볼 것."
+                % (steer_deg, self.max_deg, steer_ms))
+
         # 엔코더가 앞축(조향축)에 있으므로 뒤축 이동거리로 환산: d_rear = d_front·cos(δ)
+        # odom_steer_compensation=false 면 환산하지 않는다 (조향각을 못 믿을 때).
         d_front = delta / self.cpm
-        d = d_front * math.cos(steer_rad)
+        d = d_front * math.cos(steer_rad) if self.odom_steer_comp else d_front
         speed = d / dt
         self.distance_m += abs(d)
 
@@ -925,6 +1188,39 @@ class McuBridge(Node):
         m = Float32(); m.data = float(speed * 3.6); self.pub_speed_kph.publish(m)
         m = Float32(); m.data = float(self.distance_m); self.pub_distance.publish(m)
 
+        # ---- 공분산 누적 ----
+        #
+        #  위치 오차는 이동거리에 비례해 쌓인다 (counts_per_meter 편차).
+        #  방위 오차는 두 갈래로 쌓인다.
+        #    1) 회전할 때 — 조향각을 측정하지 못해 회전량 자체가 부정확
+        #    2) 직진할 때 — 조향 영점 오차, 토 틀어짐으로 조금씩 휜다
+        #  방위가 틀어지면 그 뒤의 위치 오차가 거리에 비례해 커지므로,
+        #  방위 분산을 위치 분산에도 반영한다.
+        sigma_d = self.odom_dist_ratio * abs(d)
+        sigma_th = (self.odom_yaw_ratio * abs(dtheta)
+                    + self.odom_yaw_drift * abs(d))
+
+        self.var_yaw = min(self.var_yaw + sigma_th * sigma_th,
+                           self.odom_max_yaw_var)
+        # 순수 거리 오차만 누적한다 (counts_per_meter 편차)
+        pos_var = min(self.var_x + sigma_d * sigma_d, self.odom_max_pos_var)
+        self.var_x = pos_var
+        self.var_y = pos_var
+
+        # 실제 위치 오차는 방위 오차가 지배한다.
+        # 방위가 sigma_yaw 만큼 틀어진 채로 distance_m 를 갔다면
+        # 횡방향으로 대략 (distance_m x sigma_yaw) 만큼 벌어진다.
+        # 이건 누적값이 아니라 현재 상태에서 매번 계산한다.
+        lateral = self.distance_m * math.sqrt(self.var_yaw)
+        pos_var_with_yaw = min(pos_var + lateral * lateral,
+                               self.odom_max_pos_var)
+
+        sigma_v = self.odom_vel_ratio * abs(speed) + self.odom_vel_floor
+        # 각속도도 조향각 추정에 의존하므로 같은 비율로 본다
+        sigma_w = (self.odom_yaw_ratio
+                   * abs(speed * math.tan(steer_rad) / self.wheelbase)
+                   + self.odom_vel_floor)
+
         odom = Odometry()
         odom.header.stamp = self.get_clock().now().to_msg()
         odom.header.frame_id = self.odom_frame
@@ -935,18 +1231,54 @@ class McuBridge(Node):
         odom.pose.pose.orientation.w = math.cos(self.th * 0.5)
         odom.twist.twist.linear.x = speed
         odom.twist.twist.angular.z = speed * math.tan(steer_rad) / self.wheelbase
+
+        # 6x6 행렬, 행 우선. 순서는 x y z roll pitch yaw.
+        # 2D 차량이라 z/roll/pitch 는 쓰지 않으므로 큰 값을 넣어
+        # 융합 필터가 그 축을 무시하도록 한다.
+        big = 1e6
+        pose_cov = [0.0] * 36
+        pose_cov[0]  = max(pos_var_with_yaw, 1e-4)   # x
+        pose_cov[7]  = max(pos_var_with_yaw, 1e-4)   # y
+        pose_cov[14] = big                            # z
+        pose_cov[21] = big                            # roll
+        pose_cov[28] = big                            # pitch
+        pose_cov[35] = max(self.var_yaw, 1e-5)        # yaw
+        odom.pose.covariance = pose_cov
+
+        twist_cov = [0.0] * 36
+        twist_cov[0]  = sigma_v * sigma_v             # vx
+        twist_cov[7]  = big                            # vy (횡슬립은 모델에 없음)
+        twist_cov[14] = big
+        twist_cov[21] = big
+        twist_cov[28] = big
+        twist_cov[35] = sigma_w * sigma_w             # wz
+        odom.twist.covariance = twist_cov
+
         self.pub_odom.publish(odom)
 
         if self.tf_bc:
-            tf = TransformStamped()
-            tf.header = odom.header
-            tf.child_frame_id = self.base_frame
-            tf.transform.translation.x = self.x
-            tf.transform.translation.y = self.y
-            tf.transform.rotation.z = odom.pose.pose.orientation.z
-            tf.transform.rotation.w = odom.pose.pose.orientation.w
-            # tf2_ros Python follows the ROS API's camelCase method name.
-            self.tf_bc.sendTransform(tf)
+            # ★ 0829 수정: send_transform (X) → sendTransform (O)
+            #   tf2_ros 파이썬 API 는 카멜케이스다. 이 오타 하나 때문에
+            #   매 STATUS 마다 예외가 나면서 둘이 같이 죽어 있었다.
+            #     1) TF 가 한 번도 발행되지 않음
+            #     2) handle_line 에서 이 뒤에 있던 펌웨어 fault 감지가 건너뛰어짐
+            #        → 아두이노가 FAULT 를 내도 E-Stop 래치가 안 걸렸다
+            #   TF 실패가 다른 처리를 막지 않도록 여기서 따로 잡는다.
+            try:
+                tf = TransformStamped()
+                tf.header = odom.header
+                tf.child_frame_id = self.base_frame
+                tf.transform.translation.x = self.x
+                tf.transform.translation.y = self.y
+                tf.transform.rotation.z = odom.pose.pose.orientation.z
+                tf.transform.rotation.w = odom.pose.pose.orientation.w
+                self.tf_bc.sendTransform(tf)
+            except Exception as exc:
+                if not self._tf_warned:
+                    self._tf_warned = True
+                    self.get_logger().error(
+                        "TF 발행 실패: %s — TF 없이 계속한다 "
+                        "(/odom 토픽은 정상)" % exc)
 
     # ============================================================
 
@@ -968,8 +1300,7 @@ def main(args=None):
     finally:
         node.shutdown()
         node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":

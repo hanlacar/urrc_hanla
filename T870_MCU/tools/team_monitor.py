@@ -55,7 +55,8 @@ class Chan:
 
 class TeamMonitor(Node):
 
-    def __init__(self, topics):
+    def __init__(self, topics, mcu_ns="/mcu"):
+        ns = mcu_ns.rstrip("/")
         super().__init__("team_monitor")
         self.ch = {}
 
@@ -79,19 +80,19 @@ class TeamMonitor(Node):
         sub("mode", topics["mode"], String, s)
 
         # 중재 출력
-        sub("mcu_drive", "/mcu/cmd_drive", Float32, f)
-        sub("mcu_wheel", "/mcu/cmd_wheel", Int32, i)
-        sub("mcu_stop", "/mcu/cmd_stop", Bool, b)
-        sub("act_drive", "/mcu/active_drive_source", String, s)
-        sub("act_wheel", "/mcu/active_wheel_source", String, s)
-        sub("safety", "/mcu/safety_state", String, s)
+        sub("mcu_drive", ns + "/cmd_drive", Float32, f)
+        sub("mcu_wheel", ns + "/cmd_wheel", Int32, i)
+        sub("mcu_stop", ns + "/cmd_stop", Bool, b)
+        sub("act_drive", ns + "/active_drive_source", String, s)
+        sub("act_wheel", ns + "/active_wheel_source", String, s)
+        sub("safety", ns + "/safety_state", String, s)
 
         # 차량 피드백
-        sub("enc", "/mcu/encoder", Int32, i)
-        sub("rpm", "/mcu/rpm", Float32, f)
-        sub("ard_state", "/mcu/fw_state", String, s)
-        sub("connected", "/mcu/connected", Bool, b)
-        sub("tele_ok", "/mcu/telemetry_ok", Bool, b)
+        sub("enc", ns + "/encoder", Int32, i)
+        sub("rpm", ns + "/rpm", Float32, f)
+        sub("ard_state", ns + "/fw_state", String, s)
+        sub("connected", ns + "/connected", Bool, b)
+        sub("tele_ok", ns + "/telemetry_ok", Bool, b)
 
         self.create_timer(0.2, self.render)
 
@@ -178,6 +179,8 @@ def main():
     ap.add_argument("--lidar-stop", default="/lidar_stop")
     ap.add_argument("--camera-stop", default="/camera_stop")
     ap.add_argument("--mode", default="/vehicle_mode")
+    ap.add_argument("--mcu-ns", default="/mcu",
+                    help="MCU 발행 토픽 접두어")
     a = ap.parse_args()
 
     topics = {
@@ -189,7 +192,7 @@ def main():
     }
 
     rclpy.init()
-    node = TeamMonitor(topics)
+    node = TeamMonitor(topics, a.mcu_ns)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

@@ -37,6 +37,7 @@ class CourseMissionNode(Node):
     def __init__(self):
         super().__init__("course_mission_node")
         defaults = {
+            "initial_section": 1,
             "ramp_pitch_deg": 15.0, "ramp_delay_sec": 0.5,
             "ramp_slow_pitch_deg": 5.0, "ramp_slow_hold_sec": 3.0,
             "ramp_level_pitch_deg": 3.0,
@@ -77,7 +78,10 @@ class CourseMissionNode(Node):
             self.p("ramp_post_stop_drive_sec"),
             self.p("ramp_second_line_stop_sec"),
             self.p("traffic20_rearm_sec"))
-        self.data = MissionInput()
+        initial_section = int(self.p("initial_section"))
+        if not 1 <= initial_section <= 11:
+            raise ValueError("initial_section must be between 1 and 11")
+        self.data = MissionInput(section=initial_section)
         self.previous_path = None
         self.path_accuracy = 0.0
         self.path_confidence = 0.0

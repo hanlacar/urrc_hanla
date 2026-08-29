@@ -327,3 +327,99 @@ def test_scenario_lidar_drive_without_wheel(inputs, prio, gate):
     wval, wused, wok, _ = gate.resolve("T_PARK", inputs, now, 0.5, 0)
     assert (src, dval) == ("lidar", 2.0)      # 구동 살아있음
     assert (wval, wok) == (0, False)          # 조향만 폴백
+
+
+# ==========================================================
+# 구독 진단 (0829) — 타입·QoS 불일치를 잡아내는가
+#
+#  이 두 가지는 ROS 가 에러를 안 낸다. 메시지만 조용히 안 온다.
+#  "저쪽은 쏘는데 나는 못 받는" 상황의 대부분이 이것이라 회귀 시험을 둔다.
+# ==========================================================
+from t870_mcu.diagnostics import check_subscriptions
+
+
+class _Rel:
+    def __init__(self, name):
+        self.name = name
+
+
+class _Qos:
+    def __init__(self, name):
+        self.reliability = _Rel(name)
+
+
+class _Info:
+    def __init__(self, node, typ, rel="RELIABLE"):
+        self.node_namespace = "/"
+        self.node_name = node
+        self.topic_type = typ
+        self.qos_profile = _Qos(rel)
+
+
+class _Log:
+    def __init__(self):
+        self.msgs = []
+
+    def error(self, m):
+        self.msgs.append(m)
+
+
+class _Node:
+    def __init__(self, table):
+        self.table = table
+        self._log = _Log()
+
+    def get_logger(self):
+        return self._log
+
+    def get_publishers_info_by_topic(self, topic):
+        return self.table.get(topic, [])
+
+
+def test_진단_정상이면_조용하다():
+    n = _Node({"/a": [_Info("x", "std_msgs/msg/Float32")]})
+    check_subscriptions(n, [("/a", "std_msgs/msg/Float32", "구동")], set())
+    assert n._log.msgs == []
+
+
+def test_진단_발행자없으면_조용하다():
+    # 팀 노드가 늦게 뜨는 것은 정상이다. 이걸 에러로 찍으면 소음이 된다.
+    n = _Node({})
+    check_subscriptions(n, [("/a", "std_msgs/msg/Float32", "구동")], set())
+    assert n._log.msgs == []
+
+
+def test_진단_타입불일치를_잡는다():
+    n = _Node({"/a": [_Info("lidar", "std_msgs/msg/Float32")]})
+    check_subscriptions(n, [("/a", "std_msgs/msg/Int32", "조향")], set())
+    assert len(n._log.msgs) == 1
+    assert "타입이 다르다" in n._log.msgs[0]
+
+
+def test_진단_QoS불일치를_잡는다():
+    n = _Node({"/a": [_Info("cam", "std_msgs/msg/Bool", "BEST_EFFORT")]})
+    check_subscriptions(n, [("/a", "std_msgs/msg/Bool", "급정거")], set())
+    assert len(n._log.msgs) == 1
+    assert "QoS" in n._log.msgs[0]
+
+
+def test_진단_같은문제를_두번찍지않는다():
+    n = _Node({"/a": [_Info("cam", "std_msgs/msg/Bool", "BEST_EFFORT")]})
+    seen = set()
+    spec = [("/a", "std_msgs/msg/Bool", "급정거")]
+    check_subscriptions(n, spec, seen)
+    check_subscriptions(n, spec, seen)
+    check_subscriptions(n, spec, seen)
+    assert len(n._log.msgs) == 1
+
+
+def test_진단_reliability가_정수여도_동작한다():
+    # rclpy 구현에 따라 enum 이 아니라 정수로 오는 경우가 있다
+    class _IntQos:
+        reliability = 2          # 2 = BEST_EFFORT
+
+    info = _Info("cam", "std_msgs/msg/Bool")
+    info.qos_profile = _IntQos()
+    n = _Node({"/a": [info]})
+    check_subscriptions(n, [("/a", "std_msgs/msg/Bool", "급정거")], set())
+    assert len(n._log.msgs) == 1

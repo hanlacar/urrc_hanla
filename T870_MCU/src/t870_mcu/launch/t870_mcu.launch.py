@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -38,12 +38,8 @@ def generate_launch_description():
     port = LaunchConfiguration("port")
     use_bridge = LaunchConfiguration("bridge")
     use_manager = LaunchConfiguration("manager")
-    ros_domain_id = LaunchConfiguration("ros_domain_id")
 
     return LaunchDescription([
-        DeclareLaunchArgument("ros_domain_id", default_value="10",
-                              description="ROS 2 DDS domain shared with perception PC"),
-        SetEnvironmentVariable("ROS_DOMAIN_ID", ros_domain_id),
         DeclareLaunchArgument("config", default_value=default_config,
                               description="통합 파라미터 yaml 경로"),
         DeclareLaunchArgument("port", default_value="auto",
