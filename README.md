@@ -20,6 +20,184 @@ GPS 구간 번호 → course_mission → /camera_drive, /camera_wheel
 발행하며 `/lidar_stop`, `/camera_stop`, `/manual_stop`, `/estop_lock`은
 일반 경로 명령보다 우선한다.
 
+## 처음 보는 사람을 위한 시스템 설명
+
+자율주행은 하나의 AI가 차량을 직접 움직이는 구조가 아니다. 이 프로젝트는
+인지, 판단, 경로·조향 제어, 차량제어의 네 계층으로 나뉘며 각 계층은 ROS 2
+토픽으로 결과를 다음 계층에 전달한다.
+
+| 계층 | 질문 | 대표 노드 | 출력 |
+|---|---|---|---|
+| 인지 | 화면에 도로·차선·표지·신호가 있는가? | `camera_yolo_inference_node` | 마스크, 객체, 유효성 |
+| 판단 | 지금 어느 구간이며 멈추거나 가야 하는가? | `course_mission_node` | 주행 단계, 조향 후보, 상태 |
+| 경로·조향 제어 | 차량이 어느 선을 따라 얼마나 꺾어야 하는가? | `camera_path_planner_node`, `camera_path_controller_node` | 경로, 목표 조향각·속도 |
+| 차량제어 | 여러 팀 명령 중 무엇을 실제 MCU로 보낼 것인가? | `mcu_manager`, `mcu_bridge` | 모터 단계, 조향각, 정지 명령 |
+
+### 1. 인지: 카메라 영상에서 주행 정보를 만드는 과정
+
+입력은 `/camera/image_raw` 영상과 `/camera/camera_info` 카메라 내부
+파라미터다. `camera_yolo_inference_node`가 한 번의 추론 결과에서 다음 정보를
+만든다.
+
+| 인지 결과 | 토픽 | 사용 목적 |
+|---|---|---|
+| 도로 영역 | `/camera/road_mask` | 차량이 주행 가능한 면적 계산 |
+| 흰색 차선 | `/camera/white_line_mask` | 일반 차선 경계 계산 |
+| 노란색 차선 | `/camera/yellow_line_mask` | 중앙선·S자 안전 경계 계산 |
+| 전체 객체 | `/perception/detections_json` | 신호등·정지선·표지 후처리 |
+| 정지선 | `/perception/stop_detected` | 경사로·교차로 정지 판단 |
+| traffic20 | `/perception/traffic20_detected` | 9번 가속구간 단계 전환 |
+| 처리 상태 | `/camera/perception_valid` | 최신 영상과 추론 결과의 유효성 |
+| 시각화 | `/perception/detections_image` | 사람이 ROI·마스크·경로 확인 |
+
+검출됐다는 사실과 실제 주행에 사용한다는 것은 다르다. 예를 들어 1번 구간에서
+정지선과 traffic20을 검출하고 토픽을 발행할 수는 있지만, 미션 판단기가 해당
+입력을 의도적으로 무시한다.
+
+영상이 `max_image_age_sec`보다 오래됐거나 추론 지연이 제한을 넘으면 인지
+유효성을 내린다. 실제 카메라와 저장 영상 publisher가 동시에 같은 토픽을
+발행하면 서로 다른 프레임이 섞이므로 반드시 하나만 실행한다.
+
+### 2. BEV 변환과 경로 생성
+
+카메라 마스크는 원근이 포함된 2차원 화면이므로 픽셀 중앙을 그대로 따라가면
+안 된다. `camera_path_planner_node`는 카메라 위치·자세와 지면 모델을 이용해
+마스크를 차량 기준 좌표계의 BEV(Bird's-Eye View)로 바꾼다.
+
+차량 좌표계에서 `x`는 차량 전방, `y`는 좌우 방향이다. 현재 주요 실측값은
+축거 0.73m, 뒷바퀴 중심에서 카메라 중심까지 0.41m다. 생성되는
+`/camera/path`는 차량이 앞으로 따라갈 `(x, y)` 점들의 목록이다.
+
+경로 생성기는 상황에 따라 다음 자료를 조합한다.
+
+- 양쪽 경계가 보이면 두 경계의 중앙
+- 한쪽 경계만 보이면 차선 폭과 안전여유를 적용한 평행 경로
+- 도로만 보이면 주행 가능 영역의 중심
+- S자 구간에서는 노란선과 장애물 사이의 통과 가능한 corridor
+- 교차로에서는 정해진 진행 방향과 도로 영역
+
+새 프레임 경로를 그대로 사용하지 않고 공간 필터와 프레임 간 이동 제한을
+적용한다. 경로가 너무 짧거나, 급격히 꺾이거나, 이전 경로에서 과도하게 이동한
+경우 `/camera/path_valid=false`로 만든다. 출력 토픽은 다음과 같다.
+
+| 토픽 | 의미 |
+|---|---|
+| `/camera/path` | 차량 기준 목표 경로 |
+| `/camera/path_valid` | 제어에 사용 가능한 경로인지 |
+| `/camera/path_confidence` | 현재 경로 근거의 신뢰도 |
+| `/camera/path_mode` | 실제 제어에 사용 중인 경로 모드 |
+| `/camera/path_observed_mode` | 현재 프레임에서 관측한 후보 모드 |
+| `/camera/path_status` | 경로 생성·거부 이유 |
+| `/camera/path_debug_image` | BEV와 목표 경로 확인 화면 |
+
+### 3. 판단: 구간에 따라 같은 인지를 다르게 사용하는 과정
+
+`course_mission_node`는 `/mission/section`의 1~11 번호를 기준으로 상태기계를
+선택한다. 입력은 카메라 경로, 곡률 속도계획, IMU pitch, 정지선 거리,
+신호등, traffic20, MCU odom이다.
+
+판단 결과는 다음 후보 명령으로 발행된다.
+
+| 토픽 | 타입 | 의미 |
+|---|---|---|
+| `/camera_drive` | `Float32` | `0` 정지, `1~3` 전진 단계 |
+| `/camera_wheel` | `Int32` | 목표 조향각 `-27~+27도` |
+| `/camera_stop` | `Bool` | 입력 스트림 상실 등 명시적 긴급정지 |
+| `/drive_mode` | `String` | MCU가 사용할 현재 구간 번호 |
+| `/mission/status` | `String` | 왜 그 명령을 냈는지 설명 |
+| `/mission/active_section` | `Int8` | 다른 카메라 노드가 사용할 구간 번호 |
+
+일반 신호대기나 곡률 정지는 `/camera_drive=0`으로 표현한다. `/camera_stop`은
+MCU의 독립적인 hard-stop 채널이므로 모든 일반 정지에 남용하지 않는다.
+
+교차로 4·6번은 정지선이 2m 이내일 때 GREEN만 출발을 허용한다. RED,
+YELLOW 또는 확정 신호가 없으면 정지한다. 8번은 LEFT만 허용하고 다른 신호는
+무시한다. 11번은 최종 신호차의 GREEN만 출발을 허용한다.
+
+### 4. 경로추종과 조향 계산
+
+`camera_path_controller_node`는 Pure Pursuit로 경로 위의 목표점을 고른다.
+lookahead가 짧으면 경로에 민감하지만 조향이 흔들릴 수 있고, 길면 부드럽지만
+급커브를 늦게 따라간다. 현재 실행 설정은 1.0~1.5m 가변 lookahead다.
+
+목표점이 정해지면 축거 0.73m인 자전거 모델로 앞바퀴 조향각을 계산한다.
+계산값에는 두 가지 제한이 적용된다.
+
+- 물리 조향 한계: `-27~+27도`
+- 시간당 변화 한계: 최대 `20도/초`
+
+따라서 한 프레임의 경로가 옆으로 움직여도 조향 명령이 즉시 반대쪽 끝까지
+뛰지 않는다. 제어 노드는 20Hz로 계산하며 다음을 발행한다.
+
+| 토픽 | 의미 |
+|---|---|
+| `/camera/target_steering_deg` | Pure Pursuit가 계산한 제한 적용 조향각 |
+| `/camera/target_speed_mps` | 경로 종류·곡률 기반 목표속도 |
+| `/control/path_status` | 목표점, 원시·제한 조향각, 경로 상태 |
+
+별도의 `curvature_speed_planner_node`는 전체 경로의 최대 곡률을 보고
+`/control/curvature_drive_stage`를 만든다. 완만하면 순항, 급하면 1단 감속,
+과도한 곡률이면 0단 정지를 요청한다. 경로가 0.5초 이상 오래되거나 신뢰도가
+0.45 미만이면 계획을 유효하지 않은 것으로 처리한다.
+
+### 5. 차량제어: MCU 중재기가 최종 명령을 선택하는 과정
+
+카메라·라이다·GPS는 모터를 직접 제어하지 않고 각자의 후보 명령만 발행한다.
+`mcu_manager`가 안전 우선순위와 현재 구간을 적용해 하나의 최종 명령을 고른다.
+
+```text
+E-stop
+  ↓ 없을 때
+각 센서의 stop
+  ↓ 없을 때
+수동 조종 override
+  ↓ 없을 때
+구동 우선순위와 구간별 조향 권한
+  ↓
+/mcu/cmd_drive, /mcu/cmd_wheel, /mcu/cmd_stop
+```
+
+구동 후보의 기본 우선순위는 `lidar > camera > gps`다. 조향은 기본적으로
+카메라가 담당하고 5·7·10번은 YAML의 권한 설정에 따라 라이다가 담당한다.
+5번에서 라이다 회피 명령은 `/avoidance/active=true`가 최신 상태일 때만
+통과한다. 단, `/lidar_stop`은 회피 게이트와 무관하게 항상 적용된다.
+
+후보 명령은 연속 스트림이다. drive나 wheel이 0.5초 이상 갱신되지 않으면
+오래된 명령을 계속 사용하지 않는다. 조향 권한자의 값이 끊기면 바퀴를 중앙으로
+보내고 `stop_on_wheel_source_loss=true` 설정에 따라 정지한다.
+
+`mcu_bridge`는 최종 ROS 명령을 115200 baud 시리얼 프로토콜로 Arduino Mega에
+전달하고, 펌웨어 상태·엔코더·속도·odom을 다시 ROS로 발행한다. Arduino v37은
+실제 구동 PWM, 조향 액추에이터, 급제동과 안티롤백을 담당한다.
+
+### 6. 안전 설계 원칙
+
+안전 조건은 특정 구간보다 높은 우선순위로 처리한다.
+
+1. `/estop_lock=true`이면 다른 모든 명령을 무시하고 정지한다.
+2. 라이다·카메라·수동 stop 중 하나라도 최신 `true`이면 즉시 정지한다.
+3. 경로·속도계획·조향 권한자의 입력이 끊기면 정지한다.
+4. 허용 범위를 벗어난 drive와 wheel 값은 MCU 중재 단계에서 제한한다.
+5. 상태 판단 이유는 `/mission/status`와 `/mcu/safety_state`로 공개한다.
+
+`/camera/path_jump_detected`처럼 현재 진단에만 쓰이는 토픽도 있다. 진단값이
+존재한다고 자동 정지 기능까지 구현된 것은 아니므로 README의 구간별 설명과
+실제 `/mission/status`, `/mcu/safety_state`를 함께 확인해야 한다.
+
+### 7. 문제가 생겼을 때 계층별 확인 순서
+
+| 증상 | 먼저 볼 토픽 | 의미 |
+|---|---|---|
+| 객체가 안 보임 | `/perception/detections_image`, `/camera/inference_status` | 모델·입력영상·추론 문제 |
+| ROI는 보이지만 경로가 없음 | `/camera/path_status`, `/camera/path_valid` | BEV·마스크·검증 문제 |
+| 경로는 있는데 조향이 없음 | `/camera/target_steering_deg`, `/camera_wheel` | 제어 또는 미션 입력 문제 |
+| 카메라 명령은 있는데 차가 안 감 | `/mcu/safety_state`, `/mcu/active_drive_source` | MCU 우선순위·stop·timeout 문제 |
+| 직진만 함 | `/mcu/active_wheel_source`, `/drive_mode` | 구간별 조향 권한자 문제 |
+| 갑자기 정지 | `/mission/status`, `/mcu/safety_state` | 어느 계층이 정지를 요청했는지 확인 |
+
+한 번에 최종 모터만 보지 말고 위에서 아래 순서로 확인하면 오류가 인지,
+판단, 제어, MCU 중 어디에서 시작됐는지 구분할 수 있다.
+
 ## 실행 전 준비
 
 각 터미널에서 다음 환경을 먼저 적용한다.
