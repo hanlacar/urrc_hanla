@@ -28,7 +28,7 @@ camera_yolo_inference_node:
     bev_forward_min_m: 0.1
     bev_forward_max_m: 6.0
     # Measured D456 lens centre relative to rear-axle base_link.
-    camera_x_m: 0.38
+    camera_x_m: 0.41
     camera_y_m: 0.0
     camera_z_m: 0.96
     camera_mount_roll_deg: 0.0

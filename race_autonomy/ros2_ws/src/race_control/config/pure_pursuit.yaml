@@ -1,11 +1,11 @@
 pure_pursuit:
   ros__parameters:
     path_topic: "/perception/local_path_json"
-    # Encoder calibration: 543 count/m, converted by the Arduino bridge.
+    # Encoder calibration: 199.8 count/m, converted by the Arduino bridge.
     speed_feedback_topic: "/vehicle/speed_mps"
     speed_feedback_is_rpm: false
-    # Measured wheel diameter: 0.30 m.
-    wheel_radius_m: 0.15
+    # Vehicle wheel specification: 0.26 m diameter.
+    wheel_radius_m: 0.13
     rpm_per_wheel_rpm: 1.0
     steering_topic: "/camera/target_steering_deg"
     target_speed_topic: "/camera/target_speed_mps"
@@ -13,13 +13,13 @@ pure_pursuit:
     lookahead_topic: "/control/lookahead_m"
     lookahead_point_topic: "/control/lookahead_point_json"
     # Measured front-axle to rear-axle center distance.
-    wheelbase_m: 0.77
+    wheelbase_m: 0.73
     # Dynamic lookahead: low speed reacts nearby; higher speed looks farther.
     minimum_lookahead_m: 0.8
     lookahead_gain_s: 1.0
     maximum_lookahead_m: 1.5
     maximum_steering_deg: 27.0
-    steering_rate_limit_deg_s: 60.0
+    steering_rate_limit_deg_s: 20.0
     steering_sign: 1.0
     # Confidence gating and last-good-path hold happen in the path planner.
     minimum_confidence: 0.0

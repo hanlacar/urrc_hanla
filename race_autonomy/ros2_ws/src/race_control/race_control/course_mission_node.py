@@ -5,7 +5,7 @@ import time
 from dataclasses import replace
 
 import rclpy
-from nav_msgs.msg import Path
+from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float32, Int8, Int32, String
 
@@ -46,6 +46,8 @@ class CourseMissionNode(Node):
             "ramp_post_stop_drive_sec": 3.0,
             "ramp_second_line_stop_sec": 1.0,
             "traffic20_rearm_sec": 0.5,
+            "traffic20_rearm_distance_m": 2.0,
+            "odom_topic": "/mcu/odom",
             "stop_line_trigger_distance_m": 2.0,
             "minimum_stop_sec": 2.0,
             "green_confirm_sec": 2.0,
@@ -77,7 +79,8 @@ class CourseMissionNode(Node):
             self.p("stop_line_rearm_sec"),
             self.p("ramp_post_stop_drive_sec"),
             self.p("ramp_second_line_stop_sec"),
-            self.p("traffic20_rearm_sec"))
+            self.p("traffic20_rearm_sec"),
+            self.p("traffic20_rearm_distance_m"))
         initial_section = int(self.p("initial_section"))
         if not 1 <= initial_section <= 11:
             raise ValueError("initial_section must be between 1 and 11")
@@ -91,10 +94,15 @@ class CourseMissionNode(Node):
         self.path_jump_detected = False
         self.control_was_active = False
         self.updated = {}
+        self.odom_last_xy=None;self.odom_distance_m=0.0
         self.active_section_pub = self.create_publisher(
             Int8, "/mission/active_section", 10)
         self.vehicle_mode_pub = self.create_publisher(
             String, "/vehicle_mode", 10)
+        # T870 MCU v19 uses string route numbers on /drive_mode. Keep the
+        # descriptive /vehicle_mode output for existing consumers.
+        self.drive_mode_pub = self.create_publisher(
+            String, "/drive_mode", 10)
         self.camera_drive_pub = self.create_publisher(
             Float32, "/camera_drive", 10)
         self.camera_wheel_pub = self.create_publisher(
@@ -143,6 +151,8 @@ class CourseMissionNode(Node):
                  "speed_mps", float)
         self.sub(Bool, str(self.p("vehicle_speed_valid_topic")),
                  "speed_valid", bool)
+        self.create_subscription(
+            Odometry,str(self.p("odom_topic")),self.on_odom,10)
         self.input_guard_topic = str(self.p("input_guard_topic")).strip()
         if self.input_guard_topic:
             self.sub(Bool, self.input_guard_topic, "input_guard_alive", bool)
@@ -174,12 +184,29 @@ class CourseMissionNode(Node):
             # into the next one. Within a section, however, UNKNOWN means
             # "no newer decision" and the latest confirmed color is retained.
             self.data.traffic_green=False
+            self.data.traffic_left=False
             self.data.traffic_red=False
             self.data.traffic_yellow=False
             self.data.final_signal_green=False
             self.data.final_signal_red=False
         self.data.section = section
         self.updated["section"] = time.monotonic()
+
+    def on_odom(self, msg):
+        x = float(msg.pose.pose.position.x)
+        y = float(msg.pose.pose.position.y)
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return
+        if self.odom_last_xy is not None:
+            step = math.hypot(x-self.odom_last_xy[0], y-self.odom_last_xy[1])
+            # A one-cycle jump this large is an odom reset/discontinuity, not
+            # vehicle travel. Ignore it so it cannot arm a second sign.
+            if step <= 1.0:
+                self.odom_distance_m += step
+        self.odom_last_xy = (x, y)
+        self.data.odom_distance_m = self.odom_distance_m
+        self.data.odom_distance_valid = True
+        self.updated["odom_distance_m"] = time.monotonic()
 
     def on_path(self, msg):
         current = [(pose.pose.position.x, pose.pose.position.y)
@@ -228,11 +255,13 @@ class CourseMissionNode(Node):
     def on_traffic_light(self, msg):
         state = str(msg.data).strip().upper()
         now = time.monotonic()
-        if state in {"GREEN","RED","YELLOW"}:
+        if state in {"GREEN","LEFT","RED","YELLOW"}:
             self.data.traffic_green = state == "GREEN"
+            self.data.traffic_left = state == "LEFT"
             self.data.traffic_red = state == "RED"
             self.data.traffic_yellow = state == "YELLOW"
-        for field in ("traffic_green", "traffic_red", "traffic_yellow"):
+        for field in ("traffic_green", "traffic_left", "traffic_red",
+                      "traffic_yellow"):
             self.updated[field] = now
 
     def on_final_signal(self,msg):
@@ -256,6 +285,7 @@ class CourseMissionNode(Node):
             stop_detected=self.data.stop_detected and fresh("stop_detected"),
             stop_distance_valid=self.data.stop_distance_valid and fresh("stop_distance_valid", "stop_distance_m"),
             traffic_green=self.data.traffic_green and fresh("traffic_green"),
+            traffic_left=self.data.traffic_left and fresh("traffic_left"),
             traffic_red=self.data.traffic_red and fresh("traffic_red"),
             traffic_yellow=(self.data.traffic_yellow and
                             fresh("traffic_yellow")),
@@ -268,6 +298,9 @@ class CourseMissionNode(Node):
                                 fresh("yellow_ahead_valid", "yellow_ahead_m")),
             speed_valid=(self.data.speed_valid and
                          fresh("speed_valid", "speed_mps")),
+            odom_distance_m=self.odom_distance_m,
+            odom_distance_valid=(self.data.odom_distance_valid and
+                                 fresh("odom_distance_m")),
         )
         output = self.logic.update(safe)
         if self.input_guard_topic:
@@ -284,6 +317,7 @@ class CourseMissionNode(Node):
         self.active_section_pub.publish(Int8(data=int(self.data.section)))
         self.vehicle_mode_pub.publish(String(data=self.SECTION_TO_VEHICLE_MODE.get(
             int(self.data.section), "IDLE")))
+        self.drive_mode_pub.publish(String(data=str(int(self.data.section))))
         emergency_stop = camera_emergency_stop(
             output.status, self.control_was_active)
         if output.stage > 0:

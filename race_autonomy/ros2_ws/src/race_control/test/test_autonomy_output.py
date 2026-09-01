@@ -22,7 +22,7 @@ def test_course_manager_republishes_gps_section_as_active_section():
 def test_course_manager_retains_latest_confirmed_signal_on_unknown():
     text=(Path(__file__).parents[1]/"race_control"/
           "course_mission_node.py").read_text()
-    assert 'if state in {"GREEN","RED","YELLOW"}' in text
+    assert 'if state in {"GREEN","LEFT","RED","YELLOW"}' in text
     assert 'if state in {"GREEN","RED"}' in text
     assert "if section != self.data.section" in text
 
@@ -36,6 +36,7 @@ def test_course_manager_publishes_external_mcu_camera_interface():
     assert "camera_emergency_stop(" in text
     assert "Bool(data=emergency_stop)" in text
     assert '"/vehicle_mode"' in text
+    assert '"/drive_mode"' in text
     assert '1: "START"' in text
     assert '11: "FINISH"' in text
 

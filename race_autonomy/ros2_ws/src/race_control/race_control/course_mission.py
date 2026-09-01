@@ -50,6 +50,7 @@ class MissionInput:
     stop_distance_m: float = float("inf")
     stop_distance_valid: bool = False
     traffic_green: bool = False
+    traffic_left: bool = False
     traffic_red: bool = False
     traffic_yellow: bool = False
     traffic20_detected: bool = False
@@ -65,6 +66,8 @@ class MissionInput:
     speed_mps: float = 0.0
     speed_valid: bool = False
     input_guard_alive: bool = False
+    odom_distance_m: float = 0.0
+    odom_distance_valid: bool = False
 
 
 @dataclass
@@ -86,7 +89,8 @@ class CourseMission:
                  stop_line_rearm_sec=0.5,
                  ramp_post_stop_drive_sec=3.0,
                  ramp_second_line_stop_sec=1.0,
-                 traffic20_rearm_sec=0.5):
+                 traffic20_rearm_sec=0.5,
+                 traffic20_rearm_distance_m=2.0):
         self.ramp_pitch_deg = float(ramp_pitch_deg)
         self.ramp_delay_sec = float(ramp_delay_sec)
         self.stop_distance_m = float(stop_distance_m)
@@ -101,6 +105,7 @@ class CourseMission:
         self.ramp_post_stop_drive_sec = float(ramp_post_stop_drive_sec)
         self.ramp_second_line_stop_sec = float(ramp_second_line_stop_sec)
         self.traffic20_rearm_sec = float(traffic20_rearm_sec)
+        self.traffic20_rearm_distance_m=float(traffic20_rearm_distance_m)
         self.section = None
         self.ramp_trigger_time = None
         self.ramp_crossing = False
@@ -127,6 +132,7 @@ class CourseMission:
         self.traffic20_count = 0
         self.traffic20_active = False
         self.traffic20_absent_start = None
+        self.traffic20_first_odom_m = None
 
     def enter_section(self, section):
         if section == self.section:
@@ -157,6 +163,7 @@ class CourseMission:
             self.traffic20_count = 0
             self.traffic20_active = False
             self.traffic20_absent_start = None
+            self.traffic20_first_odom_m = None
         if section != 11:
             self.final_stopped = False
         return True
@@ -259,23 +266,27 @@ class CourseMission:
         if section in INTERSECTIONS:
             if not data.camera_path_valid:
                 return self.stopped("SAFE_STOP:CAMERA_PATH_INVALID", CAMERA, direction)
-            signal_visible=(data.traffic_red or data.traffic_yellow or
-                            data.traffic_green)
             line_visible=data.stop_detected and data.stop_distance_valid
-            if not signal_visible or not line_visible:
+            if not line_visible:
                 return self.camera_output(
                     data, data.camera_steering_deg,
-                    "INTERSECTION_IGNORE_MISSING_LINE_OR_SIGNAL", direction)
+                    "INTERSECTION_SEARCHING_FOR_STOP_LINE", direction)
             if data.stop_distance_m > self.stop_distance_m:
                 return self.camera_output(
                     data, data.camera_steering_deg,
                     "INTERSECTION_APPROACH_STOP_LINE", direction)
-            if data.traffic_red or data.traffic_yellow:
-                signal="RED" if data.traffic_red else "YELLOW"
-                return self.stopped(f"INTERSECTION_{signal}_STOP_AT_2M",
-                                    CAMERA,direction)
-            return self.camera_output(
-                data, data.camera_steering_deg, "INTERSECTION_GO", direction)
+            permitted = (data.traffic_left if section == 8 else
+                         data.traffic_green)
+            if permitted:
+                return self.camera_output(
+                    data, data.camera_steering_deg,
+                    ("INTERSECTION_LEFT_GO" if section == 8 else
+                     "INTERSECTION_GREEN_GO"), direction)
+            signal = ("NOT_LEFT" if section == 8 else
+                      "RED" if data.traffic_red else
+                      "YELLOW" if data.traffic_yellow else "NOT_GREEN")
+            return self.stopped(
+                f"INTERSECTION_{signal}_STOP_AT_2M", CAMERA, direction)
 
         if not data.camera_path_valid:
             return self.stopped("SAFE_STOP:CAMERA_PATH_INVALID", CAMERA, direction)
@@ -284,13 +295,19 @@ class CourseMission:
             if data.traffic20_detected:
                 self.traffic20_absent_start = None
                 if not self.traffic20_active:
-                    self.traffic20_active = True
+                    if not data.odom_distance_valid:
+                        return self.stopped("SAFE_STOP:TRAFFIC20_ODOM_INVALID",CAMERA,direction)
+                    if self.traffic20_count==0:
+                        self.traffic20_count=1
+                        self.traffic20_first_odom_m=float(data.odom_distance_m)
+                        self.traffic20_active=True
+                    elif (float(data.odom_distance_m)-
+                          float(self.traffic20_first_odom_m) >=
+                          self.traffic20_rearm_distance_m):
+                        self.traffic20_count=2
+                        self.traffic20_active=True
                     self.traffic20_start_time = data.now
-                    self.traffic20_confirmed = False
-                if (not self.traffic20_confirmed and
-                        data.now-self.traffic20_start_time >= 2.0):
-                    self.traffic20_confirmed = True
-                    self.traffic20_count = min(2,self.traffic20_count+1)
+                    self.traffic20_confirmed = self.traffic20_active
             elif self.traffic20_active:
                 if self.traffic20_absent_start is None:
                     self.traffic20_absent_start = data.now
@@ -327,16 +344,21 @@ class CourseMission:
                 direction)
 
         if section == 11:
-            at_line=(data.stop_detected and data.stop_distance_valid and
-                     data.stop_distance_m <= 1.0)
-            if data.final_signal_red and at_line:
-                return self.stopped("FINISH_RED_STOP_AT_1M",CAMERA,direction)
+            line_visible=(data.stop_detected and data.stop_distance_valid)
+            if not line_visible:
+                return self.camera_output(
+                    data,data.camera_steering_deg,
+                    "FINISH_INTERSECTION_SEARCHING_FOR_STOP_LINE",direction)
+            if data.stop_distance_m > self.stop_distance_m:
+                return self.camera_output(
+                    data,data.camera_steering_deg,
+                    "FINISH_INTERSECTION_APPROACH_STOP_LINE",direction)
             if data.final_signal_green:
                 return self.camera_output(
                     data,data.camera_steering_deg,"FINISH_GREEN_GO",direction)
-            return self.camera_output(
-                data,data.camera_steering_deg,
-                "FINISH_IGNORE_MISSING_SIGNAL_OR_LINE",direction)
+            signal="RED" if data.final_signal_red else "NOT_GREEN"
+            return self.stopped(
+                f"FINISH_{signal}_STOP_AT_2M",CAMERA,direction)
 
         if section == 5:
             return self.camera_output(

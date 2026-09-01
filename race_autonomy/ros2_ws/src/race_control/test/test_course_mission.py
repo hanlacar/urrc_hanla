@@ -157,14 +157,18 @@ def intersection_data(now, **kwargs):
 
 
 @pytest.mark.parametrize("section",(4,6,8))
-def test_first_two_intersections_ignore_missing_line_or_signal(section):
+def test_intersections_stop_at_line_without_confirmed_green(section):
     logic=CourseMission()
     missing_signal=logic.update(data(
         section,stop_detected=True,stop_distance_valid=True,
         stop_distance_m=1.0))
-    assert missing_signal.stage==1
+    assert missing_signal.stage==0
+    expected=("INTERSECTION_NOT_LEFT_STOP_AT_2M" if section==8 else
+              "INTERSECTION_NOT_GREEN_STOP_AT_2M")
+    assert missing_signal.status==expected
     missing_line=logic.update(data(section,traffic_red=True))
     assert missing_line.stage==1
+    assert missing_line.status=="INTERSECTION_SEARCHING_FOR_STOP_LINE"
 
 
 @pytest.mark.parametrize("section",(4,6,8))
@@ -178,18 +182,30 @@ def test_first_two_intersections_stop_for_red_or_yellow_at_two_meters(section,si
     assert output.status.endswith("STOP_AT_2M")
 
 
-@pytest.mark.parametrize("section",(4,6,8))
+@pytest.mark.parametrize("section",(4,6))
 def test_first_two_intersections_green_goes_and_far_red_approaches(section):
     logic=CourseMission()
     green=logic.update(data(
         section,traffic_green=True,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0))
-    assert (green.stage,green.status)==(1,"INTERSECTION_GO")
+    assert (green.stage,green.status)==(1,"INTERSECTION_GREEN_GO")
     far_red=logic.update(data(
         section,traffic_red=True,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.1))
     assert (far_red.stage,far_red.status)==(
         1,"INTERSECTION_APPROACH_STOP_LINE")
+
+
+def test_section_eight_uses_only_left_signal_for_go():
+    logic=CourseMission()
+    at_line=dict(stop_detected=True,stop_distance_valid=True,
+                 stop_distance_m=2.0)
+    left=logic.update(data(8,traffic_left=True,traffic_red=True,**at_line))
+    assert (left.stage,left.status)==(1,"INTERSECTION_LEFT_GO")
+    green=logic.update(data(8,traffic_green=True,**at_line))
+    assert (green.stage,green.status)==(0,"INTERSECTION_NOT_LEFT_STOP_AT_2M")
+    yellow=logic.update(data(8,traffic_yellow=True,**at_line))
+    assert (yellow.stage,yellow.status)==(0,"INTERSECTION_NOT_LEFT_STOP_AT_2M")
 
 
 def test_parking_sections_keep_camera_candidate_for_mcu_priority():
@@ -207,38 +223,79 @@ def test_two_traffic20_events_toggle_stage_two_to_three_and_back():
     assert logic.update(data(9, traffic20_detected=False,
                              planned_drive_stage=2)).stage == 2
     detected = logic.update(data(9, now=1.0, traffic20_detected=True,
-                                 planned_drive_stage=2))
-    assert detected.stage == 2
-    assert detected.status.startswith("TRAFFIC20_CONFIRMING_")
+                                 planned_drive_stage=2,
+                                 odom_distance_valid=True,
+                                 odom_distance_m=10.0))
+    assert detected.stage == 3
+    assert detected.status == "TRAFFIC20_COUNT_1:STAGE_3"
     assert logic.update(data(9, now=2.99, traffic20_detected=True,
-                             planned_drive_stage=2)).stage == 2
+                             planned_drive_stage=2,
+                             odom_distance_valid=True,
+                             odom_distance_m=10.5)).stage == 3
     confirmed = logic.update(data(9, now=3.0, traffic20_detected=True,
-                                  planned_drive_stage=2))
+                                  planned_drive_stage=2,
+                                  odom_distance_valid=True,
+                                  odom_distance_m=10.5))
     assert confirmed.stage == 3
     assert confirmed.status == "TRAFFIC20_COUNT_1:STAGE_3"
     logic.update(data(9,now=4.0,traffic20_detected=False,
-                      planned_drive_stage=2))
+                      planned_drive_stage=2,odom_distance_valid=True,
+                      odom_distance_m=11.0))
     logic.update(data(9,now=4.5,traffic20_detected=False,
-                      planned_drive_stage=2))
+                      planned_drive_stage=2,odom_distance_valid=True,
+                      odom_distance_m=11.0))
     assert logic.update(data(9,now=5.0,traffic20_detected=True,
-                             planned_drive_stage=2)).stage==3
+                             planned_drive_stage=2,odom_distance_valid=True,
+                             odom_distance_m=12.0)).stage==2
     assert logic.update(data(9,now=6.99,traffic20_detected=True,
-                             planned_drive_stage=2)).stage==3
+                             planned_drive_stage=2)).stage==2
     second=logic.update(data(9,now=7.0,traffic20_detected=True,
                              planned_drive_stage=2))
     assert (second.stage,second.status)==(2,"TRAFFIC20_COUNT_2:STAGE_2")
 
 
-def test_traffic20_confirmation_resets_if_detection_breaks_before_two_seconds():
+def test_traffic20_requires_rearm_before_a_second_confirmed_event():
     logic = CourseMission()
     logic.update(data(9, now=1.0, traffic20_detected=True,
-                      planned_drive_stage=2))
+                      planned_drive_stage=2, odom_distance_valid=True,
+                      odom_distance_m=10.0))
     logic.update(data(9, now=2.0, traffic20_detected=False,
                       planned_drive_stage=2))
     logic.update(data(9, now=2.5, traffic20_detected=False,
                       planned_drive_stage=2))
     assert logic.update(data(9, now=3.0, traffic20_detected=True,
-                             planned_drive_stage=2)).stage == 2
+                             planned_drive_stage=2,odom_distance_valid=True,
+                             odom_distance_m=12.0)).stage == 2
+
+
+def test_second_traffic20_requires_minimum_odom_distance():
+    logic = CourseMission(traffic20_rearm_distance_m=2.0)
+    first = logic.update(data(
+        9, now=1.0, traffic20_detected=True, planned_drive_stage=2,
+        odom_distance_valid=True, odom_distance_m=10.0))
+    assert first.stage == 3
+    logic.update(data(9, now=2.0, traffic20_detected=False,
+                      planned_drive_stage=2, odom_distance_valid=True,
+                      odom_distance_m=10.5))
+    logic.update(data(9, now=2.5, traffic20_detected=False,
+                      planned_drive_stage=2, odom_distance_valid=True,
+                      odom_distance_m=10.5))
+    too_close = logic.update(data(
+        9, now=3.0, traffic20_detected=True, planned_drive_stage=2,
+        odom_distance_valid=True, odom_distance_m=11.9))
+    assert (too_close.stage, logic.traffic20_count) == (3, 1)
+    far_enough = logic.update(data(
+        9, now=3.1, traffic20_detected=True, planned_drive_stage=2,
+        odom_distance_valid=True, odom_distance_m=12.0))
+    assert (far_enough.stage, logic.traffic20_count) == (2, 2)
+
+
+def test_traffic20_does_not_arm_without_fresh_odom():
+    output = CourseMission().update(data(
+        9, traffic20_detected=True, planned_drive_stage=2,
+        odom_distance_valid=False))
+    assert (output.stage, output.status) == (
+        0, "SAFE_STOP:TRAFFIC20_ODOM_INVALID")
 
 
 def test_traffic20_upgrade_preserves_curvature_slow_and_stop():
@@ -262,16 +319,17 @@ def test_invalid_curvature_plan_safe_stops():
     assert output.status == "SAFE_STOP:SPEED_PLAN_INVALID"
 
 
-def test_finish_red_stops_at_one_meter_and_green_goes():
+def test_finish_intersection_stops_at_two_meters_and_green_goes():
     logic = CourseMission()
     red=logic.update(data(
-        11,stop_detected=True,stop_distance_valid=True,stop_distance_m=1.0,
+        11,stop_detected=True,stop_distance_valid=True,stop_distance_m=2.0,
         final_signal_red=True))
-    assert (red.stage,red.status)==(0,"FINISH_RED_STOP_AT_1M")
+    assert (red.stage,red.status)==(0,"FINISH_RED_STOP_AT_2M")
     green=logic.update(data(
         11,stop_detected=True,stop_distance_valid=True,stop_distance_m=0.5,
         final_signal_green=True))
     assert (green.stage,green.status)==(1,"FINISH_GREEN_GO")
-    unknown=logic.update(data(11,stop_detected=False))
-    assert unknown.stage==1
+    unknown=logic.update(data(
+        11,stop_detected=True,stop_distance_valid=True,stop_distance_m=2.0))
+    assert (unknown.stage,unknown.status)==(0,"FINISH_NOT_GREEN_STOP_AT_2M")
     assert logic.update(data(1, camera_path_valid=False)).stage == 0

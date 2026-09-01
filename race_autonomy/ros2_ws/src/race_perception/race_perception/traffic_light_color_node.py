@@ -27,20 +27,21 @@ class TrafficLightColorNode(Node):
         defaults = {
             "detections_topic": "/perception/detections_json",
             "state_topic": "/perception/traffic_light_state",
+            "go_topic": "/perception/traffic_light_go",
             "result_topic": "/perception/traffic_light_state_json",
             "candidate_class_names": [
-                "R_light", "Y_light", "G_light", "etc_light"],
+                "R_light", "Y_light", "G_light", "Left", "etc_light"],
             "minimum_yolo_confidence": 0.25,
             "stop_line_distance_topic": "/perception/stop_line_distance_m",
             "stop_line_distance_valid_topic": (
                 "/perception/stop_line_distance_valid"),
             "activation_distance_m": 3.0,
             "distance_timeout_sec": 0.35,
-            "confirmation_sec": 3.0,
+            "confirmation_frames": 3,
             "final_image_topic":"/camera/image_raw",
             "final_state_topic":"/perception/final_signal_state",
             "final_process_hz":10.0,
-            "final_confirmation_sec":0.3,
+            "final_confirmation_frames":3,
             "final_roi":[0.2,0.05,0.8,0.70],
             "final_minimum_blob_area":40,
             "final_dominance_ratio":1.35,
@@ -53,8 +54,11 @@ class TrafficLightColorNode(Node):
         self.signal_tracker = None
         self.active_section=1;self.final_last_process=0.0
         self.final_candidate="UNKNOWN";self.final_candidate_start=None
+        self.final_candidate_frames=0
         self.state_pub = self.create_publisher(
             String, self.param("state_topic"), 10)
+        self.go_pub = self.create_publisher(
+            Bool, self.param("go_topic"), 10)
         self.result_pub = self.create_publisher(
             String, self.param("result_topic"), 10)
         self.final_state_pub=self.create_publisher(
@@ -109,17 +113,26 @@ class TrafficLightColorNode(Node):
         except (ValueError, TypeError, json.JSONDecodeError):
             detections = []
 
+        # Section 8 is a protected-left intersection. Only the Left class is
+        # eligible there; ordinary red/yellow/green detections are ignored.
+        candidate_names = (["Left"] if self.active_section == 8 else
+                           [name for name in self.param("candidate_class_names")
+                            if str(name).strip().lower() != "left"])
         best, candidate_count = best_labeled_light(
-            detections, self.param("candidate_class_names"),
-            self.param("minimum_yolo_confidence"))
+            detections, candidate_names, self.param("minimum_yolo_confidence"))
         distance_fresh, in_zone = self.confirmation_zone_active()
         confirmed_state, self.signal_tracker = update_light_confirmation(
-            best["state"], in_zone, self.signal_tracker, time.monotonic(),
-            self.param("confirmation_sec"))
+            best["state"],best["box"],in_zone,self.signal_tracker,
+            self.param("confirmation_frames"),0.3)
         candidate = (self.signal_tracker or {}).get("candidate")
-        accumulated_sec = float(
-            (self.signal_tracker or {}).get("accumulated_sec", 0.0))
+        consecutive_frames = int(
+            (self.signal_tracker or {}).get("consecutive_frames", 0))
         self.state_pub.publish(String(data=confirmed_state))
+        # Fail-safe Boolean contract used by intersection control:
+        # only a temporally confirmed green light permits motion.
+        permitted = (confirmed_state == "LEFT" if self.active_section == 8
+                     else confirmed_state == "GREEN")
+        self.go_pub.publish(Bool(data=permitted))
         self.result_pub.publish(String(data=json.dumps({
             **best,
             "raw_state": best["state"],
@@ -129,13 +142,14 @@ class TrafficLightColorNode(Node):
             "stop_line_distance_fresh": distance_fresh,
             "in_confirmation_zone": in_zone,
             "confirmation_candidate": candidate,
-            "confirmation_elapsed_sec": accumulated_sec,
-            "confirmation_required_sec": float(self.param("confirmation_sec")),
+            "confirmation_consecutive_frames": consecutive_frames,
+            "confirmation_required_frames": int(self.param("confirmation_frames")),
         })))
 
     def on_final_image(self,msg):
         if self.active_section != 11:
             self.final_candidate="UNKNOWN";self.final_candidate_start=None
+            self.final_candidate_frames=0
             return
         now=time.monotonic();period=1.0/max(1.0,float(self.param("final_process_hz")))
         if now-self.final_last_process < period:return
@@ -151,15 +165,16 @@ class TrafficLightColorNode(Node):
             self.param("final_dominance_ratio"))
         if state=="UNKNOWN":
             self.final_candidate="UNKNOWN";self.final_candidate_start=None
+            self.final_candidate_frames=0
             confirmed="UNKNOWN"
         elif state != self.final_candidate:
             self.final_candidate=state;self.final_candidate_start=now
+            self.final_candidate_frames=1
             confirmed="UNKNOWN"
-        elif (self.final_candidate_start is not None and
-              now-self.final_candidate_start >=
-              float(self.param("final_confirmation_sec"))):
-            confirmed=state
-        else:confirmed="UNKNOWN"
+        else:
+            self.final_candidate_frames+=1
+            confirmed=(state if self.final_candidate_frames>=
+                       int(self.param("final_confirmation_frames")) else "UNKNOWN")
         self.final_state_pub.publish(String(data=confirmed))
 
 

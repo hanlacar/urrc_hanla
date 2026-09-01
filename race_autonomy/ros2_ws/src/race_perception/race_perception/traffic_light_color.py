@@ -7,8 +7,17 @@ YOLO_LIGHT_STATES = {
     "r_light": "RED",
     "y_light": "YELLOW",
     "g_light": "GREEN",
+    "left": "LEFT",
 }
-CONFIRMABLE_STATES = {"RED", "YELLOW", "GREEN"}
+CONFIRMABLE_STATES = {"RED", "YELLOW", "GREEN", "LEFT"}
+
+
+def box_iou(a, b):
+    if a is None or b is None or len(a) != 4 or len(b) != 4:return 0.0
+    ax1,ay1,ax2,ay2=(float(v) for v in a);bx1,by1,bx2,by2=(float(v) for v in b)
+    intersection=max(0.,min(ax2,bx2)-max(ax1,bx1))*max(0.,min(ay2,by2)-max(ay1,by1))
+    union=max(0.,(ax2-ax1)*(ay2-ay1))+max(0.,(bx2-bx1)*(by2-by1))-intersection
+    return intersection/union if union>0. else 0.0
 
 
 def finish_signal_from_bgr(frame,roi=(0.2,0.05,0.8,0.70),
@@ -87,26 +96,22 @@ def best_labeled_light(detections, candidate_names, minimum_confidence):
     return best, candidate_count
 
 
-def update_light_confirmation(candidate, eligible, tracker, now,
-                              confirmation_sec=3.0):
-    """Confirm one labeled color for accumulated observation time."""
+def update_light_confirmation(candidate, candidate_box, eligible, tracker,
+                              confirmation_frames=3, minimum_iou=0.3):
+    """Confirm one labeled color only after consecutive inference frames."""
     if not eligible:
         return UNKNOWN, None
-    current = dict(tracker) if tracker is not None else None
     if candidate not in CONFIRMABLE_STATES:
-        if current is not None:
-            current["last_time"] = float(now)
-        return UNKNOWN, current
-    if current is None or current["candidate"] != candidate:
-        current = {
-            "candidate": candidate,
-            "accumulated_sec": 0.0,
-            "last_time": float(now),
-        }
-        return UNKNOWN, current
-    elapsed = max(0.0, float(now) - float(current["last_time"]))
-    current["accumulated_sec"] += elapsed
-    current["last_time"] = float(now)
-    duration = max(0.0, float(confirmation_sec))
-    state = candidate if current["accumulated_sec"] >= duration else UNKNOWN
+        return UNKNOWN, None
+    current = dict(tracker) if tracker is not None else None
+    same=(current is not None and current["candidate"]==candidate and
+          box_iou(candidate_box,current.get("box"))>=float(minimum_iou))
+    if not same:
+        current = {"candidate": candidate, "box": candidate_box,
+                   "consecutive_frames": 1}
+    else:
+        current["box"]=candidate_box
+        current["consecutive_frames"] += 1
+    required = max(1, int(confirmation_frames))
+    state = candidate if current["consecutive_frames"] >= required else UNKNOWN
     return state, current

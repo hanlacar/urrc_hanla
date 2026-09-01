@@ -23,6 +23,10 @@ course_mission_node:
     ramp_second_line_stop_sec: 1.0
     # Require this absence before the next traffic20 is a new sign event.
     traffic20_rearm_sec: 0.5
+    # A re-detected traffic20 must also be this far from the first one,
+    # measured from the cumulative MCU odometry path length.
+    traffic20_rearm_distance_m: 2.0
+    odom_topic: "/mcu/odom"
     # The perception node already confirms each labeled signal for 3 seconds.
     green_confirm_sec: 0.0
     command_rate_hz: 20.0

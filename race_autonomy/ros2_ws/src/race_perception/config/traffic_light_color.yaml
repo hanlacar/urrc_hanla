@@ -7,14 +7,14 @@ traffic_light_color:
     stop_line_distance_valid_topic: "/perception/stop_line_distance_valid"
     activation_distance_m: 3.0
     distance_timeout_sec: 0.35
-    confirmation_sec: 3.0
-    candidate_class_names: ["R_light", "Y_light", "G_light", "etc_light"]
+    confirmation_frames: 3
+    candidate_class_names: ["R_light", "Y_light", "G_light", "Left", "etc_light"]
     minimum_yolo_confidence: 0.25
     # OpenCV HSV is used only for the section-11 finish signal car.
     final_image_topic: "/camera/image_raw"
     final_state_topic: "/perception/final_signal_state"
     final_process_hz: 10.0
-    final_confirmation_sec: 0.3
+    final_confirmation_frames: 3
     final_roi: [0.2, 0.05, 0.8, 0.70]
     final_minimum_blob_area: 40
     final_dominance_ratio: 1.35

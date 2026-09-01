@@ -22,7 +22,7 @@ from .mask_postprocessor import (exclude_navigation_image_bottom,filter_lane_com
                                  validate_output_mask)
 from .model_manifest import load_manifest
 from .ros_image import bgr8_to_image,image_to_bgr8,mono8_to_image
-from .stop_detection import contains_stop
+from .stop_detection import best_box, update_box_confirmation
 
 class CameraYoloInferenceNode(Node):
     def __init__(self,backend=None):
@@ -31,8 +31,9 @@ class CameraYoloInferenceNode(Node):
         self.input_frame_times=deque(maxlen=240);self.output_frame_times=deque(maxlen=120)
         self.input_callbacks=MutuallyExclusiveCallbackGroup();self.inference_callbacks=MutuallyExclusiveCallbackGroup();self.visualization_callbacks=MutuallyExclusiveCallbackGroup()
         # use_sim_time is declared by rclpy itself and must not be redeclared.
-        defaults={"segmentation_model_path":"","class_manifest_path":"","device":"cpu","input_width":640,"input_height":480,"inference_fps":40.0,"detections_image_fps":30.0,"confidence_threshold":.25,"mask_threshold":.5,"road_mask_threshold":.30,"lane_mask_threshold":.45,"road_confidence_threshold":.25,"lane_confidence_threshold":.50,"lane_minimum_component_area":80,"lane_maximum_horizontal_ratio":4.0,"lane_minimum_horizontal_width":80,"navigation_bottom_exclusion_ratio":0.,"max_image_age_sec":.2,"max_inference_latency_ms":40.,"input_image_topic":"/camera/image_raw","input_camera_info_topic":"/camera/camera_info","expected_image_width":640,"expected_image_height":480,"stop_detected_topic":"/perception/stop_detected","stop_confidence_threshold":.25,"traffic20_confidence_threshold":.25,"publish_diagnostics":True,"require_cuda":False,"camera_x_m":.245,"camera_y_m":0.,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.,"path_overlay_timeout_sec":.5,"bev_forward_min_m":.3,"bev_forward_max_m":6.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.,"min_lookahead_m":.5,"max_lookahead_m":2.,"lookahead_speed_gain":.5}
+        defaults={"segmentation_model_path":"","class_manifest_path":"","device":"cpu","input_width":640,"input_height":480,"inference_fps":40.0,"detections_image_fps":30.0,"confidence_threshold":.25,"mask_threshold":.5,"road_mask_threshold":.30,"lane_mask_threshold":.45,"road_confidence_threshold":.25,"lane_confidence_threshold":.50,"lane_minimum_component_area":80,"lane_maximum_horizontal_ratio":4.0,"lane_minimum_horizontal_width":80,"navigation_bottom_exclusion_ratio":0.,"max_image_age_sec":.2,"max_inference_latency_ms":40.,"input_image_topic":"/camera/image_raw","input_camera_info_topic":"/camera/camera_info","expected_image_width":640,"expected_image_height":480,"stop_detected_topic":"/perception/stop_detected","stop_confidence_threshold":.25,"traffic20_confidence_threshold":.25,"object_confirmation_frames":3,"publish_diagnostics":True,"require_cuda":False,"camera_x_m":.41,"camera_y_m":0.,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.,"path_overlay_timeout_sec":.5,"bev_forward_min_m":.3,"bev_forward_max_m":6.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.,"min_lookahead_m":.5,"max_lookahead_m":2.,"lookahead_speed_gain":.5}
         for key,value in defaults.items():self.declare_parameter(key,value)
+        self.stop_tracker=None;self.traffic20_tracker=None
         output_qos=QoSProfile(history=QoSHistoryPolicy.KEEP_LAST,depth=1,reliability=QoSReliabilityPolicy.RELIABLE)
         self.mask_pubs={role:self.create_publisher(Image,f"/camera/{topic}",qos_profile_sensor_data) for role,topic in (("road","road_mask"),("white_line","white_line_mask"),("yellow_line","yellow_line_mask"))}
         # Debug video must never back-pressure inference when RQT is slow.
@@ -97,6 +98,7 @@ class CameraYoloInferenceNode(Node):
         if not self.ready:
             self.valid_pub.publish(Bool(data=False));self.stop_pub.publish(Bool(data=False));self.traffic20_pub.publish(Bool(data=False));self.publish_status(self.failure)
     def publish_invalid(self,image,reason):
+        self.stop_tracker=None;self.traffic20_tracker=None
         self.valid_pub.publish(Bool(data=False));self.stop_pub.publish(Bool(data=False));self.traffic20_pub.publish(Bool(data=False));self.publish_status(reason)
         if image is not None:
             zero=np.zeros((image.height,image.width),np.uint8)
@@ -209,13 +211,22 @@ class CameraYoloInferenceNode(Node):
                 masks,self.p("navigation_bottom_exclusion_ratio"))
             for role in ("white_line","yellow_line"):
                 masks[role]=filter_lane_components(masks[role],self.p("lane_minimum_component_area"),self.p("lane_maximum_horizontal_ratio"),self.p("lane_minimum_horizontal_width"))
-            self.stop_pub.publish(Bool(data=contains_stop(instances,self.model_names,self.p("stop_confidence_threshold"))))
+            required=max(1,int(self.p("object_confirmation_frames")))
+            stop_box=best_box(instances,self.model_names,{"stop","stop_line"},
+                              self.p("stop_confidence_threshold"))
+            stop_confirmed,self.stop_tracker=update_box_confirmation(
+                stop_box,self.stop_tracker,required,0.3)
+            self.stop_pub.publish(Bool(data=stop_confirmed))
             names=self.model_names
             def class_name(item):
                 class_id=int(item["class_id"])
                 return str(names.get(class_id,class_id) if isinstance(names,dict) else names[class_id]).strip().lower().replace("_","").replace("-","")
-            traffic20=any(class_name(item) in {"traffic20","speed20"} and float(item.get("confidence",0.0))>=self.p("traffic20_confidence_threshold") for item in instances)
-            self.traffic20_pub.publish(Bool(data=traffic20))
+            traffic20_box=best_box(
+                instances,self.model_names,{"traffic20","speed20"},
+                self.p("traffic20_confidence_threshold"))
+            traffic20_confirmed,self.traffic20_tracker=update_box_confirmation(
+                traffic20_box,self.traffic20_tracker,required,0.3)
+            self.traffic20_pub.publish(Bool(data=traffic20_confirmed))
             self.publish_detections(instances,image)
             latency=(time.perf_counter()-started)*1000.;self.latencies.add(latency)
             self.latency_pub.publish(Float32(data=float(latency)))

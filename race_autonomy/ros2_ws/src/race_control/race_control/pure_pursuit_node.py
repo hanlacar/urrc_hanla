@@ -38,7 +38,7 @@ class PurePursuitNode(Node):
             "status_topic": "/control/pure_pursuit_status_json",
             "lookahead_topic": "/control/lookahead_m",
             "lookahead_point_topic": "/control/lookahead_point_json",
-            "wheelbase_m": 0.78,
+            "wheelbase_m": 0.73,
             "minimum_lookahead_m": 0.8,
             "lookahead_gain_s": 1.0,
             "maximum_lookahead_m": 2.0,
@@ -49,7 +49,7 @@ class PurePursuitNode(Node):
             "control_rate_hz": 20.0,
             "commanded_speed_mps": 0.0,
             "allow_reverse": False,
-            "steering_rate_limit_deg_s": 60.0,
+            "steering_rate_limit_deg_s": 20.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)

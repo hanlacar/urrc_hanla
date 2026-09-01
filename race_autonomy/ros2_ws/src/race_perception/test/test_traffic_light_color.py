@@ -22,45 +22,53 @@ def test_opencv_finish_signal_abstains_without_dominant_color():
     assert finish_signal_from_bgr(image)[0]=="UNKNOWN"
 
 
-def test_color_requires_three_seconds_of_matching_observations():
-    state, tracker = update_light_confirmation("RED", True, None, 10.0, 3.0)
+def test_color_requires_three_consecutive_frames():
+    state, tracker = update_light_confirmation("RED", [0,0,10,10], True, None, 3)
     assert state == "UNKNOWN"
-    state, tracker = update_light_confirmation("RED", True, tracker, 12.99, 3.0)
+    state, tracker = update_light_confirmation("RED", [0,0,10,10], True, tracker, 3)
     assert state == "UNKNOWN"
-    state, tracker = update_light_confirmation("RED", True, tracker, 13.0, 3.0)
+    state, tracker = update_light_confirmation("RED", [0,0,10,10], True, tracker, 3)
     assert state == "RED"
 
 
-def test_unknown_pauses_without_resetting_confirmation():
-    _, tracker = update_light_confirmation("GREEN", True, None, 1.0, 3.0)
-    _, tracker = update_light_confirmation("GREEN", True, tracker, 2.0, 3.0)
-    state, tracker = update_light_confirmation("UNKNOWN", True, tracker, 5.0, 3.0)
+def test_unknown_resets_confirmation():
+    _, tracker = update_light_confirmation("GREEN", [0,0,10,10], True, None, 3)
+    _, tracker = update_light_confirmation("GREEN", [0,0,10,10], True, tracker, 3)
+    state, tracker = update_light_confirmation("UNKNOWN", [0,0,10,10], True, tracker, 3)
     assert state == "UNKNOWN"
-    assert tracker["candidate"] == "GREEN"
-    assert tracker["accumulated_sec"] == 1.0
-    state, tracker = update_light_confirmation("GREEN", True, tracker, 7.0, 3.0)
-    assert state == "GREEN"
+    assert tracker is None
+    state, tracker = update_light_confirmation("GREEN", [0,0,10,10], True, tracker, 3)
+    assert state == "UNKNOWN"
 
 
 def test_confirmation_resets_outside_eligible_zone():
-    tracker = {"candidate": "GREEN", "accumulated_sec": 2.0, "last_time": 3.0}
+    tracker = {"candidate": "GREEN", "box": [0,0,10,10],
+               "consecutive_frames": 2}
     assert update_light_confirmation(
-        "GREEN", False, tracker, 4.0, 3.0) == ("UNKNOWN", None)
+        "GREEN", [0,0,10,10], False, tracker, 3) == ("UNKNOWN", None)
+
+
+def test_position_jump_restarts_three_frame_confirmation():
+    _, tracker=update_light_confirmation("RED",[0,0,10,10],True,None,3)
+    _, tracker=update_light_confirmation("RED",[1,0,11,10],True,tracker,3)
+    state,tracker=update_light_confirmation("RED",[30,0,40,10],True,tracker,3)
+    assert state=="UNKNOWN" and tracker["consecutive_frames"]==1
 
 
 def test_different_color_restarts_confirmation():
-    _, tracker = update_light_confirmation("RED", True, None, 1.0, 3.0)
-    _, tracker = update_light_confirmation("RED", True, tracker, 3.0, 3.0)
-    state, tracker = update_light_confirmation("YELLOW", True, tracker, 3.1, 3.0)
+    _, tracker = update_light_confirmation("RED", [0,0,10,10], True, None, 3)
+    _, tracker = update_light_confirmation("RED", [0,0,10,10], True, tracker, 3)
+    state, tracker = update_light_confirmation("YELLOW", [0,0,10,10], True, tracker, 3)
     assert state == "UNKNOWN"
     assert tracker["candidate"] == "YELLOW"
-    assert tracker["accumulated_sec"] == 0.0
+    assert tracker["consecutive_frames"] == 1
 
 
 def test_yolo_labels_map_directly_to_signal_states():
     assert state_from_class_name("R_light") == "RED"
     assert state_from_class_name("Y_light") == "YELLOW"
     assert state_from_class_name("G_light") == "GREEN"
+    assert state_from_class_name("Left") == "LEFT"
     assert state_from_class_name("etc_light") == "UNKNOWN"
 
 
