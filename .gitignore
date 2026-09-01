@@ -46,3 +46,10 @@ test_images_100/labels/
 *.pt
 *.engine
 *.onnx
+
+# Production 11-class model. Keep this exact deployable model set in Git;
+# experimental and older weights remain ignored by the rules above.
+!race_autonomy/ros2_ws/src/camera_yolo_inference/models/hanla_competition_11class_best.pt
+!race_autonomy/ros2_ws/src/camera_yolo_inference/models/hanla_competition_11class_best.onnx
+!race_autonomy/ros2_ws/src/camera_yolo_inference/models/hanla_competition_11class_best.fp16.onnx
+!race_autonomy/ros2_ws/src/camera_yolo_inference/models/hanla_competition_11class_best.engine

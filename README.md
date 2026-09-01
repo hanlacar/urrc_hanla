@@ -346,6 +346,24 @@ Arduino IDE 설정:
 - Baud rate: 115200
 - 업로드 후 부팅 로그에서 `MCU_BOOT,v37` 확인
 
+## 카메라 인지 모델
+
+현재 운영 모델은 `race_autonomy/ros2_ws/src/camera_yolo_inference/models/`의
+`hanla_competition_11class_best` 세트다.
+
+| 파일 | 용도 |
+|---|---|
+| `.pt` | Ultralytics 원본 가중치, 재학습·재변환 기준 |
+| `.onnx` | 범용 FP32 ONNX 모델 |
+| `.fp16.onnx` | 용량과 연산량을 줄인 FP16 ONNX 모델 |
+| `.engine` | 현재 NVIDIA/TensorRT 실행용 모델 |
+
+기본 launch는 `hanla_competition_11class_best.engine`을 불러온다. TensorRT
+engine은 GPU 아키텍처와 TensorRT 버전에 영향을 받을 수 있으므로 다른 PC에서
+로드되지 않으면 `.pt` 또는 `.onnx`로 그 PC에서 engine을 다시 생성해야 한다.
+모델을 교체할 때 파일 이름만 바꾸지 말고 class manifest의 11개 클래스 순서와
+실제 모델 클래스 순서가 같은지 반드시 확인한다.
+
 ## 저장 영상 녹화
 
 ```bash
