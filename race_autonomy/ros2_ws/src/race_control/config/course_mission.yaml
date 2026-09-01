@@ -16,11 +16,13 @@ course_mission_node:
     actual_stop_speed_mps: 0.05
     # A line must remain absent this long before another detection is counted.
     stop_line_rearm_sec: 0.5
-    # At the second ramp line within 2 m, remain stopped for this duration;
-    # after it expires, continue camera path following at stage 2.
-    ramp_post_stop_drive_sec: 3.0
-    # Stop for one second before the stage-1 departure phase.
-    ramp_second_line_stop_sec: 1.0
+    # After the first ramp stop line, accept another detection as the second
+    # line only after MCU odometry reports at least this much travel.
+    ramp_stop_line_min_separation_m: 1.5
+    # At the second ramp line within 2 m, stop for exactly three seconds,
+    # then continue camera path following at stage 2 without another hold.
+    ramp_second_line_stop_sec: 3.0
+    ramp_post_stop_drive_sec: 0.0
     # Require this absence before the next traffic20 is a new sign event.
     traffic20_rearm_sec: 0.5
     # A re-detected traffic20 must also be this far from the first one,

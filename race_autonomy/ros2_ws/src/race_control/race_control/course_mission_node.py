@@ -43,8 +43,9 @@ class CourseMissionNode(Node):
             "ramp_level_pitch_deg": 3.0,
             "ramp_pitch_confirm_sec": 0.5,
             "stop_line_rearm_sec": 0.5,
-            "ramp_post_stop_drive_sec": 3.0,
-            "ramp_second_line_stop_sec": 1.0,
+            "ramp_stop_line_min_separation_m": 1.5,
+            "ramp_post_stop_drive_sec": 0.0,
+            "ramp_second_line_stop_sec": 3.0,
             "traffic20_rearm_sec": 0.5,
             "traffic20_rearm_distance_m": 2.0,
             "odom_topic": "/mcu/odom",
@@ -80,7 +81,8 @@ class CourseMissionNode(Node):
             self.p("ramp_post_stop_drive_sec"),
             self.p("ramp_second_line_stop_sec"),
             self.p("traffic20_rearm_sec"),
-            self.p("traffic20_rearm_distance_m"))
+            self.p("traffic20_rearm_distance_m"),
+            self.p("ramp_stop_line_min_separation_m"))
         initial_section = int(self.p("initial_section"))
         if not 1 <= initial_section <= 11:
             raise ValueError("initial_section must be between 1 and 11")

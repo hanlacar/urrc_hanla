@@ -71,7 +71,7 @@ camera_path_controller_node:
     front_overhang_m: 0.26
     rear_overhang_m: 0.26
     wheelbase_m: 0.73
-    min_lookahead_m: 0.8
+    min_lookahead_m: 1.0
     max_lookahead_m: 1.5
     lookahead_speed_gain: 1.0
     max_steering_deg: 27.0

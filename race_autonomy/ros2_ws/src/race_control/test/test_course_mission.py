@@ -101,45 +101,66 @@ def test_ramp_requires_stable_pitch_then_aligns_and_tracks_path():
     assert stage_one.status=="RAMP:SLOPE_STAGE_1_PATH_FOLLOW"
 
 
-def test_ramp_second_line_stops_one_second_then_holds_three_more_seconds():
+def test_ramp_second_line_stops_for_exactly_three_seconds():
     logic=CourseMission(ramp_pitch_confirm_sec=0.0,stop_line_rearm_sec=0.5)
     first=logic.update(data(2,0.0,imu_valid=True,pitch_deg=16.0,
                             stop_detected=True,stop_distance_valid=True,
-                            stop_distance_m=1.0))
+                            stop_distance_m=1.0,odom_distance_valid=True,
+                            odom_distance_m=10.0))
     assert first.status=="RAMP:ALIGN_WHEELS"
     logic.update(data(2,0.1,imu_valid=True,pitch_deg=16.0))
     logic.update(data(2,0.6,imu_valid=True,pitch_deg=16.0))
     approaching=logic.update(data(
         2,0.7,imu_valid=True,pitch_deg=16.0,stop_detected=True,
-        stop_distance_valid=True,stop_distance_m=2.1))
+        stop_distance_valid=True,stop_distance_m=2.1,
+        odom_distance_valid=True,odom_distance_m=11.5))
     assert approaching.stage==2
     stopped=logic.update(data(
         2,0.8,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0,
+        odom_distance_valid=True,odom_distance_m=11.6,
         camera_steering_deg=-6.0))
     assert (stopped.stage,stopped.steering_deg)==(0,0.0)
     assert stopped.status=="RAMP:SECOND_STOP_LINE_STOP_0.0SEC"
     assert logic.update(data(
-        2,1.79,imu_valid=True,pitch_deg=16.0,stop_detected=True,
+        2,3.79,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0)).stage==0
-    holding=logic.update(data(
-        2,1.8,imu_valid=True,pitch_deg=16.0,stop_detected=True,
-        stop_distance_valid=True,stop_distance_m=2.0,
-        camera_steering_deg=-6.0))
-    assert (holding.stage,holding.steering_deg)==(0,0.0)
-    assert holding.status=="RAMP:SECOND_STOP_LINE_HOLD_0.0SEC"
-    still_holding=logic.update(data(
-        2,4.79,imu_valid=True,pitch_deg=16.0,stop_detected=True,
-        stop_distance_valid=True,stop_distance_m=2.0,speed_valid=True,
-        speed_mps=0.2))
-    assert still_holding.stage==0
     completed=logic.update(data(
-        2,4.8,imu_valid=True,pitch_deg=16.0,stop_detected=True,
+        2,3.8,imu_valid=True,pitch_deg=16.0,stop_detected=True,
         stop_distance_valid=True,stop_distance_m=2.0,speed_valid=True,
         speed_mps=0.2,camera_steering_deg=9.0))
     assert (completed.stage,completed.steering_deg)==(2,9.0)
     assert completed.status=="RAMP:SECOND_STOP_LINE_STAGE_2_PATH_FOLLOW"
     assert logic.ramp_second_line_completed
+
+
+def test_ramp_rejects_second_line_before_one_point_five_odom_meters():
+    logic = CourseMission(ramp_pitch_confirm_sec=0.0,
+                          stop_line_rearm_sec=0.5,
+                          ramp_stop_line_min_separation_m=1.5)
+    logic.update(data(
+        2, 0.0, imu_valid=True, pitch_deg=16.0, stop_detected=True,
+        stop_distance_valid=True, stop_distance_m=1.0,
+        odom_distance_valid=True, odom_distance_m=10.0))
+    logic.update(data(2, 0.1, imu_valid=True, pitch_deg=16.0,
+                      odom_distance_valid=True, odom_distance_m=10.2))
+    logic.update(data(2, 0.6, imu_valid=True, pitch_deg=16.0,
+                      odom_distance_valid=True, odom_distance_m=10.4))
+    too_close = logic.update(data(
+        2, 0.7, imu_valid=True, pitch_deg=16.0, stop_detected=True,
+        stop_distance_valid=True, stop_distance_m=1.0,
+        odom_distance_valid=True, odom_distance_m=11.49))
+    assert too_close.stage == 2
+    assert logic.ramp_stop_line_count == 1
+
+
+def test_ramp_stop_line_requires_fresh_odom():
+    output = CourseMission(ramp_pitch_confirm_sec=0.0).update(data(
+        2, 0.0, imu_valid=True, pitch_deg=16.0, stop_detected=True,
+        stop_distance_valid=True, stop_distance_m=1.0,
+        odom_distance_valid=False))
+    assert (output.stage, output.status) == (
+        0, "RAMP:STOP_LINE_ODOM_INVALID")
 
 
 def test_s_curve_never_stops_merely_for_yellow_boundary():

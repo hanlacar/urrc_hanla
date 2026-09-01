@@ -87,10 +87,11 @@ class CourseMission:
                  actual_stop_speed_mps=0.05,
                  ramp_pitch_confirm_sec=0.5,
                  stop_line_rearm_sec=0.5,
-                 ramp_post_stop_drive_sec=3.0,
-                 ramp_second_line_stop_sec=1.0,
+                 ramp_post_stop_drive_sec=0.0,
+                 ramp_second_line_stop_sec=3.0,
                  traffic20_rearm_sec=0.5,
-                 traffic20_rearm_distance_m=2.0):
+                 traffic20_rearm_distance_m=2.0,
+                 ramp_stop_line_min_separation_m=1.5):
         self.ramp_pitch_deg = float(ramp_pitch_deg)
         self.ramp_delay_sec = float(ramp_delay_sec)
         self.stop_distance_m = float(stop_distance_m)
@@ -106,6 +107,8 @@ class CourseMission:
         self.ramp_second_line_stop_sec = float(ramp_second_line_stop_sec)
         self.traffic20_rearm_sec = float(traffic20_rearm_sec)
         self.traffic20_rearm_distance_m=float(traffic20_rearm_distance_m)
+        self.ramp_stop_line_min_separation_m = float(
+            ramp_stop_line_min_separation_m)
         self.section = None
         self.ramp_trigger_time = None
         self.ramp_crossing = False
@@ -116,6 +119,7 @@ class CourseMission:
         self.ramp_stop_line_count = 0
         self.ramp_stop_line_visible = False
         self.ramp_stop_line_lost_time = None
+        self.ramp_first_stop_line_odom_m = None
         self.ramp_second_line_stopped = False
         self.ramp_second_line_stop_start = None
         self.ramp_second_line_go_start = None
@@ -147,6 +151,7 @@ class CourseMission:
         self.ramp_stop_line_count = 0
         self.ramp_stop_line_visible = False
         self.ramp_stop_line_lost_time = None
+        self.ramp_first_stop_line_odom_m = None
         self.ramp_second_line_stopped = False
         self.ramp_second_line_stop_start = None
         self.ramp_second_line_go_start = None
@@ -206,7 +211,18 @@ class CourseMission:
                                 data.stop_distance_valid)
             if self.ramp_crossing:
                 if line_visible and not self.ramp_stop_line_visible:
-                    self.ramp_stop_line_count += 1
+                    if not data.odom_distance_valid:
+                        return self.stopped(
+                            "RAMP:STOP_LINE_ODOM_INVALID", CAMERA, direction)
+                    if self.ramp_stop_line_count == 0:
+                        self.ramp_stop_line_count = 1
+                        self.ramp_first_stop_line_odom_m = float(
+                            data.odom_distance_m)
+                    elif (self.ramp_stop_line_count == 1 and
+                          float(data.odom_distance_m) -
+                          float(self.ramp_first_stop_line_odom_m) >=
+                          self.ramp_stop_line_min_separation_m):
+                        self.ramp_stop_line_count = 2
                     self.ramp_stop_line_visible = True
                     self.ramp_stop_line_lost_time = None
                 elif not line_visible and self.ramp_stop_line_visible:

@@ -1,5 +1,5 @@
 // ==========================================================
-//  T870 하위제어기 v31
+//  T870 하위제어기 v37
 //
 //  BROON T870 개조 자율주행 차량 (24V, Ackermann)
 //  Arduino Mega 2560 / 115200 baud / 외부 라이브러리 없음
@@ -11,12 +11,14 @@
 //    최대 조향각    27도 (좌우 대칭)
 //    최소 선회반경  1.43 m   (= 0.73 / tan27)
 //    2.00 (PWM 50)  0.229 m/s
-//    3.00 (PWM 100) 0.526 m/s
+//    3.00 (PWM 100) 0.526 m/s  (0829 하중 실린 상태 실측 0.455)
 //    4.00 (PWM 150) 미측정
+//    counts_per_meter  199.8   (0829 실측. 1카운트 5.01mm)
 //
 //  [미확정 — 측정 후 반영할 것]
-//    ENCODER_CPR    현재 71. 실주행 역산은 약 22.  5m 주행으로 확정 필요
 //    전방 오버행    통로폭 계산에 필요
+//    코스팅 거리    브레이크가 없어 정지 명령 후 굴러가는 거리
+//    지면 조향각    27도는 무부하 실측값이다
 // ----------------------------------------------------------
 //
 //  조향 부호 : 우 = +, 좌 = -   (팀 규약)
@@ -28,6 +30,143 @@
 //    조향각   A0      (감시 전용. 제어에는 미사용)
 //    엔코더   A상 D2  (B상 D3 미사용)
 //    E-Stop   D24     (NC 접점. 정상 LOW / 작동·단선 HIGH)
+//
+//  v37 대비 변경 (v36 기준)  — 2026-08-30
+//   🔴 방향 전환이 영원히 안 되던 버그
+//
+//   상위가 10Hz 로 같은 후진 명령을 반복하면 requestDrive() 가 매번
+//   directionHoldActive 를 false 로 되돌렸다. 전환 조건인 300ms 대기가
+//   100ms 마다 초기화되어 절대 채워지지 않는다.
+//   → DRIVE,DIRECTION_CHANGE_PENDING 만 무한히 찍히고
+//     DRIVE,DIRECTION_CHANGE_OK 는 영영 안 나온다. 차가 후진을 못 한다.
+//
+//   시뮬레이션 (전진 중 후진 명령 10Hz):
+//     v36  4초가 지나도 전환 안 됨   PENDING 로그 40줄
+//     v37  550ms 만에 전환          PENDING 로그 1줄
+//
+//   ★ v32 에서 고친 제동 버그와 완전히 같은 패턴이다.
+//     "진행 중인 절차에 같은 명령이 또 오면 타이머를 다시 찍지 않는다."
+//     이 규칙을 방향 전환에는 적용하지 않았던 것.
+//
+//   같이 고친 것: WATCHDOG_STOP 로그도 상태가 바뀔 때만 찍는다.
+//     (예전에는 조건이 유지되는 동안 매 루프 찍혀 로그가 묻혔다)
+//
+//  v36 대비 변경 (v35 기준)  — 2026-08-29
+//   🔴 ENCODER_DEBOUNCE_US 2000 → 200 으로 되돌린다
+//
+//   v34 에서 200 → 2000 으로 올린 것은 **측정이 아니라 추론**이었다.
+//   "3단 펄스 간격이 6.1ms 이니 2ms 는 안전하다" 고 계산했는데,
+//   실차에서 2~3m 를 주행했을 때 카운트가 3~5 밖에 안 올랐다.
+//   기대값은 400~600 이다. 99% 를 잃었다.
+//
+//   ★ 결정적 근거:
+//     counts_per_meter 199.8 을 잰 측정 스케치(T870_CPM_MEASURE_v2)의
+//     디바운스는 **200us** 였다.  955카운트 / 4.78m 도 그 조건의 값이다.
+//     디바운스와 counts_per_meter 는 한 쌍이다. 한쪽만 바꾸면
+//     나머지 한쪽이 무효가 된다. 나는 그걸 어겼다.
+//
+//   → 199.8 이 측정된 조건(200us)으로 되돌린다.
+//     노이즈 대책이 필요하다면 **재측정을 먼저 하고** 두 값을 같이 바꾼다.
+//
+//   ※ 함께 추가: 부팅 배너에 엔코더 설정을 찍는다.
+//     지금까지 어느 디바운스로 도는지 로그만 봐서는 알 수 없었다.
+//     그래서 이 문제를 찾는 데 하루가 걸렸다.
+//
+//  v35 대비 변경 (v34 기준)  — 2026-08-29
+//   ★ 경사로 자동 안티롤백 (AR)
+//
+//   1. 정지 명령 상태에서 엔코더가 저 혼자 올라가면 = 차가 굴러가고 있다.
+//      버티는 방향으로 짧은 토크 펄스를 넣어 제자리를 지킨다.
+//      경사로에 세워두면 매번 뒤로 밀리던 문제를 없앤다.
+//
+//   2. 우리 엔코더는 A상 단상이라 부호가 없다.
+//      "정지 명령인데 카운트가 는다" 를 밀림으로 판정한다.
+//      그래서 어느 쪽으로 미는지는 사람이 알려줘야 한다.
+//        AR1 = 전진 토크로 버팀 (오르막에 앞으로 세워둔 보통 상황)
+//        AR2 = 후진 토크로 버팀 (내리막)
+//        AR0 = 끔
+//      ⚠ 방향을 반대로 켜면 차를 스스로 밀어낸다. 반드시 확인할 것.
+//      그 사고를 막으려고 폭주 감지(ANTIROLL_ABORT_ENGAGES)를 넣었다.
+//
+//   3. 토크 펄스는 제동(v33)과 같이 엔코더가 끊는다.
+//      잘 잡히면 100ms 언저리에서 끝나고, 잘 안 잡히면 1.2초까지
+//      늘어난다 = 사실상 연속 홀딩. 필요한 만큼만 문다.
+//
+//   4. 안전 장치 5중
+//      - 1회 연속 유지 절대 상한  ANTIROLL_HOLD_MAX_MS (1.2초)
+//      - 쿨다운을 직전 유지시간 이상으로 → 스톨 듀티 50% 를 못 넘는다
+//      - 폭주 감지: 토크 중 1.0m/s 이상 미끄러지면 0.2초 안에 끈다
+//        (방향을 반대로 켠 경우가 여기 걸린다)
+//      - 무효 감지: 0.3m/s 이상 미끄러지는 개입이 3회 연속이면 끈다
+//      - 구동/제동/홀딩/FAULT/E-Stop 명령이 오면 즉시 양보
+//
+//   5. updateDriveWatchdog 가 홀딩·안티롤백을 끄던 잠재 버그 수정.
+//      H 홀딩도 2초 뒤 워치독이 목표를 0 으로 떨궈 램프와 싸우고 있었다.
+//
+//   6. STATUS 맨 뒤에 antiroll 상태 2필드 추가 (기존 파서 영향 없음)
+//
+//  v34 대비 변경 (v33 기준)  — 2026-08-29
+//   엔코더 실측 반영 + 노이즈 차단 강화
+//
+//   1. ENCODER_CPR 436 → 163
+//      아두이노 단독 측정: 955 카운트 / 4.78 m → counts_per_meter 199.8
+//      회전당 = 199.8 × 둘레 0.817m = 163
+//      (71 도 436 도 근거가 없었다. 533.1 을 믿고 계산한 값이었는데
+//       그 533.1 자체가 틀렸다)
+//
+//   2. ENCODER_DEBOUNCE_US 200 → 2000   ★ 이게 더 중요하다
+//      진짜 펄스 간격은 3단에서도 6.1ms 다. 200us 는 그 1/31 이라
+//      사실상 아무 노이즈도 막지 못했다.
+//
+//        1단 0.229 m/s →  46 카운트/s → 간격 21.9 ms
+//        2단 0.526 m/s → 105 카운트/s → 간격  9.5 ms
+//        3단 0.820 m/s → 164 카운트/s → 간격  6.1 ms
+//
+//      2ms 로 올려도 3단 대비 여유가 3배다.
+//      진짜 펄스는 하나도 안 잃고 브러시 노이즈만 10배 더 걸러낸다.
+//
+//      ※ 왜 필요한가: ROS 스택을 돌리며 정지/출발이 잦았던 세션에서
+//        카운트율이 550개/초까지 올라갔다. 그 속도면 2.75 m/s 인데
+//        이 차 최고속은 0.82 m/s 다. 대부분이 가짜 펄스였다.
+//        모터 스위칭이 잦을수록 심해지므로 대회 주행에서 특히 위험하다.
+//
+//  v33 대비 변경 (v32 기준)  — 2026-08-28
+//   제동을 고정 시간(150ms)에서 엔코더 피드백으로 바꿨다.
+//
+//   왜: 150ms 는 근거 없는 추측값이었다. 짧으면 안 서고, 길면 차가
+//       멈춘 뒤에도 역토크가 남아 뒤로 밀린다. 코스팅 거리를 아직
+//       재지 않아 적정값을 정할 근거가 없다.
+//
+//   어떻게: 역토크를 걸고 엔코더 펄스를 보다가, 일정 시간 창 안에서
+//       움직임이 임계값 이하가 되면 "섰다"고 보고 즉시 끊는다.
+//
+//   ★ 안전 설계 — 엔코더를 믿되, 엔코더가 틀려도 시간이 막는다
+//     A상만 세므로 방향을 알 수 없다. "멈췄나"는 알아도
+//     "뒤로 가는 중인가"는 모른다. 게다가 저속에서 브러시 노이즈로
+//     가짜 펄스가 생기면 "아직 움직인다"고 오판해 역토크가 안 끊긴다.
+//     그래서 BRAKE_MAX_MS 상한을 둔다. 엔코더가 무슨 말을 하든
+//     이 시간이 지나면 무조건 해제한다. 예전 150ms 고정값이 하던
+//     안전 역할을 이 상한이 이어받는다.
+//
+//     반대로 BRAKE_MIN_MS 는 첫 표본의 노이즈로 즉시 해제되는 것을 막는다.
+//
+//   ⚠ 아래 임계값들은 코스팅 거리 실측 전까지는 잠정값이다.
+//     실측 후 BRAKE_STOP_COUNTS 와 BRAKE_MAX_MS 를 다시 정할 것.
+//
+//  v32 대비 변경 (v31 기준)  — 2026-08-28
+//   1. ENCODER_CPR 71 → 436 으로 확정.
+//      바퀴 둘레 0.817m, counts_per_meter 533.1 실측에서 역산하면
+//      바퀴 1회전 = 0.817 × 533.1 = 435.5 ≈ 436 카운트다.
+//      71 이었을 때 STATUS 의 rpm 이 약 6배 크게 나왔다.
+//      ※ odoCount 는 원시 펄스 누적이라 거리·속도·odom 에는 영향이 없다.
+//         이 값은 rpm 표시에만 쓰인다.
+//
+//   2. 제동(B) 재진입 방어.
+//      제동 펄스가 진행 중일 때 B 가 또 들어오면 예전에는 brakeStartMs 를
+//      다시 찍어 펄스가 영원히 끝나지 않았다. 역토크가 계속 걸린 채로
+//      유지되어 급정거를 걸었는데 차가 뒤로 가는 상황이 만들어진다.
+//      상위(ROS 브릿지)에서도 1회만 보내도록 고쳤지만, 다른 팀이 직접
+//      시리얼을 쓸 수도 있으므로 펌웨어에서도 막는다.
 //
 //  v31 대비 변경 (v30 기준)
 //   조향 ADC 폐루프 정렬 추가. 포텐셔미터가 실제로 각도를 따라가는 경우에만
@@ -161,15 +300,62 @@ constexpr unsigned long DRIVE_COMMAND_TIMEOUT_MS = 2000;
 // ---- v29: 급정거 (다이내믹 브레이킹) ----
 //  MD30C 는 sign-magnitude 방식이라 PWM 을 0 으로 떨구면 코스팅한다.
 //  DIR 을 반대로 두고 아주 짧게 PWM 을 인가하면 역토크가 걸려 빨리 선다.
-//  BRAKE_PULSE_MS 를 크게 잡으면 역주행이 시작되므로 짧게 유지할 것.
+//  v33: 고정 펄스 길이를 없애고 엔코더 피드백으로 바꿨다.
+//  (예전 주석: "BRAKE_PULSE_MS 를 크게 잡으면 역주행이 시작되므로 짧게
+//   유지할 것" — 그 역할은 이제 BRAKE_MAX_MS 상한이 한다)
 constexpr int           BRAKE_PULSE_PWM = 120;   // 제동 펄스 세기
-constexpr unsigned long BRAKE_PULSE_MS  = 150;   // 제동 펄스 길이
+
+// ---- v33: 엔코더 피드백 제동 ----
+//
+//  1카운트 = 1.9mm (counts_per_meter 533.1)
+//  BRAKE_STOP_COUNTS 2 / BRAKE_WINDOW 50ms → 약 0.076 m/s 이하를 "정지"로 본다
+//
+constexpr unsigned long BRAKE_SAMPLE_MS      = 10;   // 표본 주기
+constexpr uint8_t       BRAKE_WINDOW_SAMPLES = 5;    // 판정 창 = 50ms
+constexpr long          BRAKE_STOP_COUNTS    = 2;    // 창 안 이동이 이 이하면 정지
+constexpr unsigned long BRAKE_MIN_MS         = 30;   // 이 전에는 판정하지 않는다
+constexpr unsigned long BRAKE_MAX_MS         = 300;  // ★ 무조건 해제 (안전 상한)
 
 // ---- v29: 경사로 홀딩 ----
 //  브레이크가 없어 정지 중 중력으로 밀린다. 램프 없이 지정 PWM 을 즉시
 //  인가해 버틴다. 스톨 전류가 흐르므로 반드시 시간 제한을 둔다.
 constexpr int           HOLD_PWM_MAX    = 90;    // 안전 상한
 constexpr unsigned long HOLD_TIMEOUT_MS = 8000;  // 이 시간 지나면 자동 해제
+
+// ---- v35: 경사로 자동 안티롤백 ----
+//
+//  H 홀딩은 사람이 "지금 버텨" 라고 눌러줘야 한다.
+//  안티롤백은 밀리는 것을 엔코더로 알아채고 저 혼자 버틴다.
+//
+//  판정: PWM 이 0 인데 엔코더 펄스가 는다 = 차가 굴러가고 있다.
+//  (A상 단상이라 부호가 없다. "어느 쪽" 인지는 AR1/AR2 로 사람이 준다)
+//
+//  1카운트 = 5.01mm (counts_per_meter 199.8)
+constexpr bool          ANTIROLL_DEFAULT_ON   = false;  // 경사로 시험 후 true 고려
+constexpr int           ANTIROLL_PWM_DEFAULT  = 70;     // HOLD_PWM_MAX 로 다시 잘린다
+constexpr long          ANTIROLL_COUNTS       = 3;      // 약 15mm 밀리면 개입
+constexpr unsigned long ANTIROLL_SAMPLE_MS    = 20;     // 감시 주기
+constexpr unsigned long ANTIROLL_ARM_DELAY_MS = 400;    // 정지 후 코스팅이 끝나길 기다린다
+
+//  토크 펄스는 제동(v33)과 같은 방식으로 엔코더가 끊는다.
+//  잘 잡히면 짧게 끝나고, 잘 안 잡히면 상한까지 늘어난다 = 사실상 연속 홀딩.
+constexpr unsigned long ANTIROLL_HOLD_MIN_MS  = 100;    // 이 전에는 정지 판정을 하지 않는다
+constexpr unsigned long ANTIROLL_HOLD_MAX_MS  = 1200;   // ★ 1회 연속 유지 절대 상한
+constexpr uint8_t       ANTIROLL_STILL_WINDOW = 3;      // 60ms 창
+constexpr long          ANTIROLL_STILL_COUNTS = 1;      // 창 안 이동이 이 이하면 섰다
+
+//  쿨다운은 직전 유지시간 이상으로 준다 → 듀티가 50% 를 못 넘는다 (스톨 발열)
+constexpr unsigned long ANTIROLL_COOLDOWN_MS  = 150;
+constexpr unsigned long ANTIROLL_SETTLE_MS    = 1500;   // 이만큼 조용하면 실패 카운터 해제
+
+//  [자동 해제 판단]  토크를 넣는 동안 얼마나 미끄러지는가로 본다.
+//    RUNAWAY : 방향을 반대로 켠 경우. 차가 스스로 가속해 달아난다 → 즉시 끈다
+//    NO_EFFECT : 경사가 감당 밖이라 토크가 의미 없다 → 3회 연속이면 끈다
+constexpr long          ANTIROLL_SLIP_CPS     = 60;   // 약 0.30 m/s 이상 미끄러지면 실패
+constexpr long          ANTIROLL_RUNAWAY_CPS  = 200;  // 약 1.00 m/s 이상이면 폭주
+constexpr unsigned long ANTIROLL_RUNAWAY_MIN_MS = 150; // 이 전에는 폭주 판정을 하지 않는다
+constexpr uint8_t       ANTIROLL_ABORT_FAILS  = 3;
+constexpr long          ANTIROLL_WARN_DRIFT   = 200;  // 감시 시작 후 1m 밀리면 경고만 낸다
 
 // 워치독 동작
 //  true  : 타임아웃 시 FAULT 래치. RESET 해야 재출발
@@ -188,7 +374,23 @@ constexpr bool WATCHDOG_LATCHES_FAULT = false;
 //    5m 캘리브레이션은 CPR 값이 틀려도 그대로 유효하다.
 //    CPR 은 RPM 표시에만 영향을 준다.
 // ==========================================================
-constexpr float         ENCODER_CPR         = 71.0f;  // ★재검증 필요
+//  ★ v34: 436 → 163 (아두이노 단독 실측).
+//    955 카운트 / 4.78 m = counts_per_meter 199.8
+//    회전당 = 199.8 × 둘레 0.817m = 163
+constexpr float         ENCODER_CPR         = 163.0f;
+//  🔴 v36: 2000 → 200 으로 되돌림.
+//
+//   v34 에서 2000 으로 올렸다가 실차에서 카운트를 99% 잃었다.
+//   (2~3m 주행에 카운트 3~5. 기대값 400~600)
+//
+//   ★ counts_per_meter 199.8 은 **디바운스 200us 조건에서 측정된 값**이다.
+//     (T870_CPM_MEASURE_v2_0829.ino, 955카운트 / 4.78m)
+//     이 둘은 한 쌍이라 한쪽만 바꾸면 다른 쪽이 무효가 된다.
+//
+//   ⚠ 노이즈가 문제라고 판단되면, 디바운스를 올리기 전에
+//     T870_ENC_DIAG 로 raw/rise/d200/d2000 을 같이 재서
+//     실제로 무엇이 잘려나가는지 눈으로 확인할 것.
+//     그리고 바꾼 뒤에는 반드시 counts_per_meter 를 다시 잰다.
 constexpr uint32_t      ENCODER_DEBOUNCE_US = 200;
 constexpr unsigned long ENCODER_UPDATE_MS   = 100;
 
@@ -242,9 +444,38 @@ bool driveForward    = true;
 // ---- v29 ----
 bool          brakeActive    = false;   // 제동 펄스 진행 중
 unsigned long brakeStartMs   = 0;
+
+// ---- v33: 제동 판정용 표본 링버퍼 ----
+long          brakeWindow[BRAKE_WINDOW_SAMPLES];
+uint8_t       brakeSampleIdx   = 0;
+uint8_t       brakeSampleCount = 0;
+unsigned long brakeLastSampleMs = 0;
 bool          holdActive     = false;   // 경사로 홀딩 중
 int           holdPwm        = 0;
 unsigned long holdStartMs    = 0;
+
+// ---- v35: 안티롤백 ----
+bool          antiRollEnabled   = ANTIROLL_DEFAULT_ON;
+bool          antiRollForward   = true;    // 버티는 방향 (AR1 전진 / AR2 후진)
+int           antiRollPwm       = ANTIROLL_PWM_DEFAULT;
+
+bool          antiRollArmed     = false;   // 기준점을 잡고 감시 중
+long          antiRollSnapshot  = 0;       // 마지막 기준 펄스
+long          antiRollArmPulse  = 0;       // 감시 시작 시점 펄스 (누적 밀림 계산용)
+unsigned long antiRollStillMs   = 0;       // 정지 조건이 성립한 시각
+unsigned long antiRollSampleMs  = 0;
+bool          antiRollWarned    = false;
+
+bool          antiRollHolding   = false;   // 지금 토크를 넣고 있다
+unsigned long antiRollHoldStart = 0;
+long          antiRollHoldPulse = 0;       // 개입 시작 시점 펄스 (미끄럼 계산용)
+unsigned long antiRollHoldSample = 0;
+long          antiRollWindow[ANTIROLL_STILL_WINDOW];
+uint8_t       antiRollWinIdx    = 0;
+uint8_t       antiRollWinCount  = 0;
+unsigned long antiRollCooldown  = 0;       // 이 시각 전에는 다시 안 문다
+uint8_t       antiRollFails     = 0;       // 연속 미끄럼 횟수
+uint16_t      antiRollEngages   = 0;       // 총 개입 횟수 (기록용)
 
 bool directionChangePending = false;
 bool pendingDriveForward    = true;
@@ -787,6 +1018,308 @@ void updateSteering(unsigned long now)
 }
 
 // ==========================================================
+// 12-b. v35 경사로 자동 안티롤백
+//
+//  [왜 필요한가]
+//   이 차에는 기계식 브레이크가 없다. 경사로에 세우면 그냥 밀린다.
+//   v29 의 H 홀딩은 사람이 눌러줘야 해서 자율주행 중에는 못 쓴다.
+//
+//  [어떻게 아는가]
+//   PWM 이 0 인데 엔코더 펄스가 늘고 있으면 차가 굴러가는 중이다.
+//   우리 엔코더는 A상 단상이라 방향 부호가 없다. 그래서 "어느 쪽으로
+//   미는가" 는 AR1(전진 버팀) / AR2(후진 버팀) 로 사람이 알려준다.
+//
+//  [왜 계속 물고 있지 않는가]
+//   스톨 상태는 전류가 그대로 흐른다. 모터와 MD30C 가 탄다.
+//   그래서 150ms 짧게 물고 놓고, 또 밀리면 다시 문다. 작년 방식과 같다.
+//
+//  [잘못 켰을 때]
+//   AR1 을 내리막에서 켜면 차를 스스로 앞으로 밀어낸다.
+//   개입이 ANTIROLL_ABORT_ENGAGES 회 이어지면 방향이 틀린 것으로 보고
+//   스스로 꺼진다. 그래도 방향은 사람이 확인하고 켤 것.
+// ==========================================================
+void releaseAntiRoll(bool alsoDisarm)
+{
+  if (antiRollHolding) {
+    applyDrivePwm(0);
+    targetDrivePwm  = 0;
+    antiRollHolding = false;
+  }
+  if (alsoDisarm) {
+    antiRollArmed   = false;
+    antiRollStillMs = 0;
+    antiRollFails   = 0;
+    antiRollWarned  = false;
+  }
+}
+
+//  개입 종료 — 토크를 놓고 기준점을 다시 잡는다.
+//
+//  why 는 왜 끝났는지. 실차에서 어느 쪽으로 끝나는지 봐야
+//  ANTIROLL_PWM / SLIP 임계값을 조정할 수 있으므로 반드시 남긴다.
+void endAntiRollHold(unsigned long now, const __FlashStringHelper *why)
+{
+  unsigned long elapsed = now - antiRollHoldStart;
+  if (elapsed == 0) {
+    elapsed = 1;
+  }
+
+  //  토크를 넣는 동안 얼마나 미끄러졌는가 = 이 개입이 먹혔는가
+  long slip = readEncoderPulseAtomic() - antiRollHoldPulse;
+  if (slip < 0) {
+    slip = -slip;
+  }
+  long slipCps = (slip * 1000L) / (long)elapsed;
+
+  applyDrivePwm(0);
+  targetDrivePwm  = 0;
+  antiRollHolding = false;
+
+  //  쿨다운을 직전 유지시간 이상으로 준다 → 스톨 듀티가 50% 를 못 넘는다.
+  unsigned long cool = elapsed;
+  if (cool < ANTIROLL_COOLDOWN_MS) {
+    cool = ANTIROLL_COOLDOWN_MS;
+  }
+  antiRollCooldown = now + cool;
+
+  //  놓은 시점을 새 기준점으로 삼는다. 안 그러면 개입 중에 돈 만큼이
+  //  그대로 "또 밀렸다" 로 읽혀 무한히 물게 된다.
+  antiRollSnapshot = readEncoderPulseAtomic();
+  antiRollStillMs  = now;
+
+  if (slipCps > ANTIROLL_SLIP_CPS) {
+    if (antiRollFails < 255) {
+      antiRollFails++;
+    }
+  }
+  else {
+    antiRollFails = 0;
+  }
+
+  Serial.print(F("ANTIROLL_OFF,"));
+  Serial.print(why);
+  Serial.print(',');
+  Serial.print(elapsed);
+  Serial.print(F(",SLIP,"));
+  Serial.print(slipCps);
+  Serial.print(F(",FAIL,"));
+  Serial.println(antiRollFails);
+
+  //  경사가 감당 밖이다. 계속 물어봐야 모터만 상한다.
+  if (antiRollFails >= ANTIROLL_ABORT_FAILS) {
+    antiRollEnabled = false;
+    releaseAntiRoll(true);
+    Serial.println(F("ANTIROLL_ABORT,NO_EFFECT"));
+  }
+}
+
+//  방향을 반대로 켰다. 차가 스스로 가속해 달아나고 있다. 즉시 끈다.
+void abortAntiRollRunaway(unsigned long now, long slipCps)
+{
+  applyDrivePwm(0);
+  targetDrivePwm   = 0;
+  antiRollHolding  = false;
+  antiRollEnabled  = false;
+  antiRollArmed    = false;
+  antiRollStillMs  = 0;
+  antiRollCooldown = now;
+
+  Serial.print(F("ANTIROLL_ABORT,RUNAWAY,"));
+  Serial.println(slipCps);
+}
+
+void updateAntiRoll(unsigned long now)
+{
+  if (!antiRollEnabled) {
+    return;
+  }
+
+  // ---- [1] 개입 중 ----
+  //  ★ 이 검사가 [2] 보다 먼저여야 한다.
+  //    개입 중에는 우리가 targetDrivePwm 을 올려두므로, 순서가 반대면
+  //    "누가 주행 중" 으로 스스로를 오인해 다음 루프에서 바로 놓아버린다.
+  //    주행/제동/홀딩 명령은 들어오는 즉시 releaseAntiRoll() 을 부르므로
+  //    여기서 다시 확인하지 않아도 선점된다.
+  if (antiRollHolding) {
+    unsigned long elapsed = now - antiRollHoldStart;
+
+    // (1-a) 절대 상한. 엔코더가 무슨 말을 하든 여기서 무조건 놓는다.
+    if (elapsed >= ANTIROLL_HOLD_MAX_MS) {
+      endAntiRollHold(now, F("MAXTIME"));
+      return;
+    }
+
+    // 램프가 홀딩 PWM 을 갉아먹지 않도록 목표를 계속 고정한다.
+    targetDrivePwm = antiRollPwm;
+
+    if (now - antiRollHoldSample < ANTIROLL_SAMPLE_MS) {
+      return;
+    }
+    antiRollHoldSample = now;
+
+    long pulse = readEncoderPulseAtomic();
+    long slip  = pulse - antiRollHoldPulse;
+    if (slip < 0) {
+      slip = -slip;
+    }
+
+    // (1-b) 폭주 감지 — 상한을 기다리지 않고 즉시 끊는다.
+    //   방향을 반대로 켜면 차가 가속한다. 이걸 1.2초나 두면 안 된다.
+    if (elapsed >= ANTIROLL_RUNAWAY_MIN_MS) {
+      long cps = (slip * 1000L) / (long)elapsed;
+      if (cps > ANTIROLL_RUNAWAY_CPS) {
+        abortAntiRollRunaway(now, cps);
+        return;
+      }
+    }
+
+    // (1-c) 정지 판정 — 제동(v33)과 같은 링버퍼 방식
+    if (elapsed < ANTIROLL_HOLD_MIN_MS) {
+      return;
+    }
+    antiRollWindow[antiRollWinIdx] = pulse;
+    antiRollWinIdx = (uint8_t)((antiRollWinIdx + 1) % ANTIROLL_STILL_WINDOW);
+    if (antiRollWinCount < ANTIROLL_STILL_WINDOW) {
+      antiRollWinCount++;
+      return;                       // 창이 아직 안 찼다
+    }
+    long oldest = antiRollWindow[antiRollWinIdx];
+    long moved  = pulse - oldest;
+    if (moved < 0) {
+      moved = -moved;
+    }
+    if (moved <= ANTIROLL_STILL_COUNTS) {
+      endAntiRollHold(now, F("STOPPED"));
+    }
+    return;
+  }
+
+  // ---- [2] 다른 기능이 구동을 쓰고 있으면 양보한다 ----
+  //  제동 펄스 / H 홀딩 / 방향 전환 대기 / 실제 주행 명령
+  if (brakeActive || holdActive || directionChangePending || targetDrivePwm > 0) {
+    antiRollArmed   = false;
+    antiRollStillMs = 0;
+    antiRollFails   = 0;
+    return;
+  }
+
+  // ---- [3] 완전히 서 있는가 ----
+  if (currentDrivePwm != 0) {
+    antiRollArmed   = false;
+    antiRollStillMs = 0;
+    return;
+  }
+
+  // ---- [4] 정지 직후 안정화를 기다렸다가 기준점을 잡는다 ----
+  if (!antiRollArmed) {
+    if (antiRollStillMs == 0) {
+      antiRollStillMs = now;
+      return;
+    }
+    if (now - antiRollStillMs < ANTIROLL_ARM_DELAY_MS) {
+      return;              // 코스팅이 끝나기를 기다린다
+    }
+    antiRollSnapshot = readEncoderPulseAtomic();
+    antiRollArmPulse = antiRollSnapshot;
+    antiRollArmed    = true;
+    antiRollWarned   = false;
+    antiRollSampleMs = now;
+    return;
+  }
+
+  // ---- [5] 감시 ----
+  if (now - antiRollSampleMs < ANTIROLL_SAMPLE_MS) {
+    return;
+  }
+  antiRollSampleMs = now;
+
+  long pulse = readEncoderPulseAtomic();
+
+  //  감시 시작 후 누적으로 얼마나 밀렸는지 — 끄지는 않고 경고만 낸다.
+  //  (여기서 꺼버리면 정작 필요한 순간에 손을 놓는 셈이 된다)
+  long drift = pulse - antiRollArmPulse;
+  if (drift < 0) {
+    drift = -drift;
+  }
+  if (!antiRollWarned && drift >= ANTIROLL_WARN_DRIFT) {
+    antiRollWarned = true;
+    Serial.print(F("ANTIROLL_WARN,DRIFT,"));
+    Serial.println(drift);
+  }
+
+  long moved = pulse - antiRollSnapshot;
+  if (moved < 0) {
+    moved = -moved;                       // 카운터가 리셋된 경우
+  }
+
+  if (moved < ANTIROLL_COUNTS) {
+    // 조용하다. 충분히 오래 조용하면 실패 카운터를 푼다.
+    if (antiRollFails > 0 && (now - antiRollStillMs) >= ANTIROLL_SETTLE_MS) {
+      antiRollFails = 0;
+      Serial.println(F("ANTIROLL_SETTLED"));
+    }
+    return;
+  }
+
+  // ---- [6] 밀림 확정 ----
+  if (now < antiRollCooldown) {
+    return;                              // 스톨 듀티 제한
+  }
+
+  setDriveDirection(antiRollForward);
+  applyDrivePwm(antiRollPwm);
+  targetDrivePwm     = antiRollPwm;
+  antiRollHolding    = true;
+  antiRollHoldStart  = now;
+  antiRollHoldPulse  = pulse;
+  antiRollHoldSample = now;
+  antiRollWinIdx     = 0;
+  antiRollWinCount   = 0;
+  if (antiRollEngages < 65535) {
+    antiRollEngages++;
+  }
+
+  Serial.print(F("ANTIROLL_ON,"));
+  Serial.print(moved);
+  Serial.print(',');
+  Serial.print(antiRollForward ? F("FWD") : F("REV"));
+  Serial.print(',');
+  Serial.println(antiRollEngages);
+}
+
+//  AR1 / AR2 / AR0
+void requestAntiRoll(int mode)
+{
+  lastDriveCommandMs = millis();
+
+  if (mode == 0) {
+    antiRollEnabled = false;
+    releaseAntiRoll(true);
+    Serial.println(F("ANTIROLL_MODE,OFF"));
+    return;
+  }
+
+  // 달리는 중에는 켜지 않는다. 켜자마자 오판할 수 있다.
+  if (currentDrivePwm > 0 || targetDrivePwm > 0) {
+    Serial.println(F("ANTIROLL_REJECTED,MOVING"));
+    return;
+  }
+
+  antiRollForward  = (mode == 1);
+  antiRollEnabled  = true;
+  antiRollArmed    = false;
+  antiRollStillMs  = 0;
+  antiRollFails    = 0;
+  antiRollWarned   = false;
+  antiRollCooldown = 0;
+
+  Serial.print(F("ANTIROLL_MODE,"));
+  Serial.print(antiRollForward ? F("FWD") : F("REV"));
+  Serial.print(F(",PWM,"));
+  Serial.println(antiRollPwm);
+}
+
+// ==========================================================
 // 13. 정지 및 FAULT
 // ==========================================================
 void forceImmediateStop()
@@ -797,6 +1330,9 @@ void forceImmediateStop()
   directionHoldActive    = false;
   brakeActive            = false;
   holdActive             = false;
+  antiRollHolding        = false;   // v35: 토크를 물고 있으면 놓는다
+  antiRollArmed          = false;
+  antiRollStillMs        = 0;
   applyDrivePwm(0);
   cancelSteer();
 }
@@ -806,13 +1342,26 @@ void forceImmediateStop()
 //
 //  감속 램프(50ms 당 -10)를 건너뛰고 즉시 세운다.
 //  DIR 을 반대로 두고 짧은 역토크 펄스를 준 뒤 PWM 0 으로 떨어뜨린다.
-//  펄스가 길면 역주행이 시작되므로 BRAKE_PULSE_MS 를 반드시 짧게 둘 것.
+//  펄스가 길면 역주행이 시작된다. v33 부터는 엔코더가 정지를 감지해
+//  끊고, 그래도 안 끊기면 BRAKE_MAX_MS 가 강제로 끝낸다.
 //
 //  주의: 모터·기어·드라이버에 부담이 간다. 비상시에만 쓴다.
 // ==========================================================
 void requestBrake()
 {
   lastDriveCommandMs = millis();
+
+  // ★ v32: 제동 펄스가 진행 중이면 타이머를 다시 찍지 않는다.
+  //
+  //   예전에는 여기서 그냥 진행해 brakeStartMs 가 갱신되었다.
+  //   상위가 B 를 제동 시간보다 짧은 주기로 반복 전송하면 updateBrake()
+  //   의 종료 조건이 영원히 성립하지 않는다. 역토크 무한 유지 = 후진.
+  //
+  //   워치독은 위에서 이미 먹였으므로 그냥 돌아가면 된다.
+  //   (응답을 찍으면 10Hz 반복 시 시리얼이 넘친다 — 조용히 넘긴다)
+  if (brakeActive) {
+    return;
+  }
 
   // 이미 서 있으면 펄스 없이 끝낸다 (불필요한 역토크 방지)
   if (currentDrivePwm == 0 && !brakeActive) {
@@ -821,6 +1370,7 @@ void requestBrake()
     directionChangePending = false;
     directionHoldActive    = false;
     holdActive             = false;
+    releaseAntiRoll(true);          // v35
     applyDrivePwm(0);
     Serial.println(F("BRAKE_OK,ALREADY_STOPPED"));
     return;
@@ -832,6 +1382,7 @@ void requestBrake()
   directionChangePending = false;
   directionHoldActive    = false;
   holdActive             = false;
+  releaseAntiRoll(true);            // v35
 
   // 역토크 펄스: 현재 진행 방향의 반대로 DIR 을 두고 짧게 인가
   applyDrivePwm(0);
@@ -839,11 +1390,36 @@ void requestBrake()
   digitalWrite(DIR_DRIVE_REAR,  driveForward ? DRIVE_REAR_REV  : DRIVE_REAR_FWD);
   applyDrivePwm(BRAKE_PULSE_PWM);
 
-  brakeActive  = true;
-  brakeStartMs = millis();
+  brakeActive       = true;
+  brakeStartMs      = millis();
+  brakeLastSampleMs = brakeStartMs;
+  brakeSampleIdx    = 0;
+  brakeSampleCount  = 0;
 
-  Serial.print(F("BRAKE_OK,"));
-  Serial.println(BRAKE_PULSE_MS);
+  Serial.print(F("BRAKE_OK,MAX"));
+  Serial.println(BRAKE_MAX_MS);
+}
+
+// ==========================================================
+//  v33: 제동 종료 — 한 곳에서만 끝낸다
+//
+//  DIR 을 원래 진행 방향으로 되돌리고 PWM 을 0 으로 떨어뜨린다.
+//  why 는 왜 끝났는지 (STOPPED / TIMEOUT). 실차에서 어느 쪽으로
+//  끝나는지 봐야 임계값을 조정할 수 있으므로 반드시 남긴다.
+// ==========================================================
+void endBrake(const __FlashStringHelper *why, unsigned long elapsed)
+{
+  applyDrivePwm(0);
+  targetDrivePwm = 0;
+  setDriveDirection(driveForward);
+  brakeActive      = false;
+  brakeSampleIdx   = 0;
+  brakeSampleCount = 0;
+
+  Serial.print(F("BRAKE_DONE,"));
+  Serial.print(why);
+  Serial.print(',');
+  Serial.println(elapsed);
 }
 
 void updateBrake(unsigned long now)
@@ -851,15 +1427,51 @@ void updateBrake(unsigned long now)
   if (!brakeActive) {
     return;
   }
-  if (now - brakeStartMs < BRAKE_PULSE_MS) {
+
+  unsigned long elapsed = now - brakeStartMs;
+
+  // ---- [1] 안전 상한 ----
+  //  엔코더가 무엇을 말하든 여기서 무조건 끝낸다.
+  //  브러시 노이즈로 가짜 펄스가 계속 생기거나, 차가 이미 반대로
+  //  움직이기 시작했을 때 역토크가 무한히 유지되는 것을 막는다.
+  if (elapsed >= BRAKE_MAX_MS) {
+    endBrake(F("TIMEOUT"), elapsed);
     return;
   }
-  // 펄스 종료 → 완전 정지. DIR 은 원래 진행 방향으로 되돌린다.
-  applyDrivePwm(0);
-  targetDrivePwm = 0;
-  setDriveDirection(driveForward);
-  brakeActive = false;
-  Serial.println(F("BRAKE_DONE"));
+
+  // ---- [2] 최소 제동 시간 ----
+  //  첫 표본 하나의 노이즈로 즉시 해제되면 제동이 아예 안 걸린다.
+  if (elapsed < BRAKE_MIN_MS) {
+    return;
+  }
+
+  // ---- [3] 표본 수집 ----
+  if (now - brakeLastSampleMs < BRAKE_SAMPLE_MS) {
+    return;
+  }
+  brakeLastSampleMs = now;
+
+  //  odoCount 는 ENCODER_UPDATE_MS(100ms)마다 갱신되어 여기엔 너무 느리다.
+  //  ISR 이 올리는 원시 카운터를 직접 읽는다.
+  long pulse = readEncoderPulseAtomic();
+
+  brakeWindow[brakeSampleIdx] = pulse;
+  brakeSampleIdx = (uint8_t)((brakeSampleIdx + 1) % BRAKE_WINDOW_SAMPLES);
+  if (brakeSampleCount < BRAKE_WINDOW_SAMPLES) {
+    brakeSampleCount++;
+    return;                       // 창이 아직 안 찼다
+  }
+
+  // ---- [4] 정지 판정 ----
+  //  링버퍼가 가득 찼으므로 "다음에 덮어쓸 자리" 가 가장 오래된 표본이다.
+  long oldest = brakeWindow[brakeSampleIdx];
+  long moved  = pulse - oldest;
+  if (moved < 0) {
+    moved = -moved;
+  }
+  if (moved <= BRAKE_STOP_COUNTS) {
+    endBrake(F("STOPPED"), elapsed);
+  }
 }
 
 // ==========================================================
@@ -878,6 +1490,7 @@ void requestHold(int pwm)
 
   if (pwm <= 0) {
     holdActive = false;
+    releaseAntiRoll(true);          // v35
     applyDrivePwm(0);
     targetDrivePwm = 0;
     Serial.println(F("HOLD_OFF"));
@@ -895,6 +1508,7 @@ void requestHold(int pwm)
   directionChangePending = false;
   directionHoldActive    = false;
   brakeActive            = false;
+  releaseAntiRoll(true);            // v35: 사람 명령이 우선
 
   setDriveDirection(true);          // 오르막에서 밀림을 막으려면 전진 토크
   applyDrivePwm(pwm);
@@ -1038,6 +1652,7 @@ void requestDrive(bool forward, int pwm)
     setDriveDirection(driveForward);
   }
   holdActive = false;
+  releaseAntiRoll(true);            // v35: 주행 명령이 안티롤백보다 우선
 
   if (pwm == 0) {
     targetDrivePwm         = 0;
@@ -1060,6 +1675,18 @@ void requestDrive(bool forward, int pwm)
   }
 
   // 반대 방향 → 감속 후 전환 예약
+  //
+  //  🔴 v37: 이미 같은 방향으로 예약이 진행 중이면 **진행 상태를 건드리지 않는다.**
+  //
+  //    상위는 10Hz 로 같은 명령을 계속 보낸다. 예전에는 그때마다
+  //    directionHoldActive 를 false 로 되돌려서, 전환 조건인 300ms 대기가
+  //    100ms 마다 초기화됐다. 그래서 전환이 영원히 완료되지 않았다.
+  //    (v32 의 제동 버그와 같은 패턴 — 진행 중인 절차의 타이머를 다시 찍었다)
+  if (directionChangePending && pendingDriveForward == forward) {
+    pendingDrivePwm = pwm;          // 속도만 갱신하고 대기는 그대로 둔다
+    return;
+  }
+
   directionChangePending = true;
   pendingDriveForward    = forward;
   pendingDrivePwm        = pwm;
@@ -1110,8 +1737,18 @@ void updateDriveController(unsigned long now)
   Serial.println(F("DRIVE,DIRECTION_CHANGE_OK"));
 }
 
+bool watchdogStopped = false;   // v37: WATCHDOG_STOP 로그 중복 방지
+
 void updateDriveWatchdog(unsigned long now)
 {
+  // ★ v35: 홀딩·안티롤백은 펌웨어가 스스로 거는 토크다.
+  //   둘 다 자체 시간 상한이 있으므로 워치독이 끼어들면 안 된다.
+  //   (예전에는 H 홀딩 2초 뒤 워치독이 목표를 0 으로 떨궈
+  //    updateHold 와 매 루프 싸웠다 — 잠재 버그였다)
+  if (holdActive || antiRollHolding) {
+    return;
+  }
+
   bool active = (currentDrivePwm > 0 ||
                  targetDrivePwm > 0 ||
                  directionChangePending);
@@ -1119,6 +1756,7 @@ void updateDriveWatchdog(unsigned long now)
     return;
   }
   if (now - lastDriveCommandMs <= DRIVE_COMMAND_TIMEOUT_MS) {
+    watchdogStopped = false;      // 명령이 살아 있으면 다음 정지는 다시 찍는다
     return;
   }
 
@@ -1129,7 +1767,11 @@ void updateDriveWatchdog(unsigned long now)
     targetDrivePwm         = 0;
     directionChangePending = false;
     directionHoldActive    = false;
-    Serial.println(F("DRIVE,WATCHDOG_STOP"));
+    //  v37: 조건이 유지되는 동안 매 루프 찍혀 로그가 묻혔다. 한 번만 찍는다.
+    if (!watchdogStopped) {
+      watchdogStopped = true;
+      Serial.println(F("DRIVE,WATCHDOG_STOP"));
+    }
   }
 }
 
@@ -1249,7 +1891,15 @@ void publishStatus()
   Serial.print(',');
   Serial.print(sEnc);
   Serial.print(',');
-  Serial.println(sRaw);
+  Serial.print(sRaw);
+
+  // v35: 안티롤백 (또 맨 뒤에만 추가한다. 기존 파서는 안 깨진다)
+  //   antiroll_state   : 0 꺼짐 / 1 감시중 / 2 개입중
+  //   antiroll_engages : 총 개입 횟수 (경사로에서 몇 번 물었나)
+  Serial.print(',');
+  Serial.print(antiRollHolding ? 2 : (antiRollEnabled ? 1 : 0));
+  Serial.print(',');
+  Serial.println(antiRollEngages);
 }
 
 void publishHelp()
@@ -1276,6 +1926,11 @@ void publishHelp()
   Serial.println(F("AC    go to calibrated center"));
   Serial.println(F("AS512 go to ADC 512"));
   Serial.println(F("SEEKOFF abort seeking"));
+  Serial.println(F("-- v35 --"));
+  Serial.println(F("AR1 anti-rollback hold FWD (uphill)"));
+  Serial.println(F("AR2 anti-rollback hold REV (downhill)"));
+  Serial.println(F("AR0 anti-rollback off"));
+  Serial.println(F("ARP70 anti-rollback hold pwm"));
 }
 
 // ==========================================================
@@ -1289,6 +1944,8 @@ void resetSystem()
   }
 
   forceImmediateStop();
+  antiRollFails      = 0;            // v35: 실패 카운터도 푼다
+  antiRollCooldown   = 0;
   faultCode          = FaultCode::NONE;
   resetRequired      = false;
   potRangeFaultCount = 0;
@@ -1389,6 +2046,23 @@ void processCommand(char* command)
     seekBegin(SEEK_TO_TARGET, (int)value);
     return;
   }
+  // v35: 경사로 자동 안티롤백
+  //  ⚠ 조향 조그 'A200' 보다 반드시 앞에서 걸러야 한다.
+  if (strcmp(command, "AR0") == 0) { requestAntiRoll(0); return; }
+  if (strcmp(command, "AR1") == 0) { requestAntiRoll(1); return; }
+  if (strcmp(command, "AR2") == 0) { requestAntiRoll(2); return; }
+  if (command[0] == 'A' && command[1] == 'R' && command[2] == 'P' && length >= 4) {
+    long value;
+    if (!parseLongStrict(command + 3, value)) {
+      Serial.println(F("ANTIROLL_ERR,BAD_VALUE"));
+      return;
+    }
+    antiRollPwm = constrain((int)value, 0, HOLD_PWM_MAX);
+    Serial.print(F("ANTIROLL_PWM,"));
+    Serial.println(antiRollPwm);
+    return;
+  }
+
   if (strcmp(command, "SEEKOFF") == 0) {
     seekPhase = SEEK_OFF;
     cancelSteer();
@@ -1411,8 +2085,12 @@ void processCommand(char* command)
     noInterrupts();
     encoderPulse = 0;
     interrupts();
-    previousPulse = 0;
-    odoCount      = 0;
+    previousPulse    = 0;
+    odoCount         = 0;
+    antiRollSnapshot = 0;          // v35: 기준점도 같이 옮긴다
+    antiRollArmPulse = 0;
+    antiRollArmed    = false;
+    antiRollStillMs  = 0;
     Serial.println(F("ODO_RESET"));
     return;
   }
@@ -1657,14 +2335,28 @@ void setup()
   lastEstopReading = (digitalRead(ESTOP_PIN) == HIGH);
   estopActive      = lastEstopReading;
 
-  Serial.println(F("MCU_BOOT,v31"));
+  Serial.println(F("MCU_BOOT,v37"));
   Serial.print(F("CENTER_ADC,"));   Serial.println(STEER_CENTER_ADC);
   Serial.print(F("CURRENT_ADC,"));  Serial.println(currentSteerAdc);
   Serial.print(F("STEER_LIMIT,"));  Serial.println(steerLimitMs);
   Serial.print(F("WATCHDOG_MS,"));  Serial.println(DRIVE_COMMAND_TIMEOUT_MS);
-  Serial.print(F("BRAKE_PULSE,"));  Serial.print(BRAKE_PULSE_PWM);
-  Serial.print(',');                Serial.println(BRAKE_PULSE_MS);
+  Serial.print(F("BRAKE_PWM,"));    Serial.println(BRAKE_PULSE_PWM);
+  Serial.print(F("BRAKE_WINDOW,")); Serial.print(BRAKE_WINDOW_SAMPLES * BRAKE_SAMPLE_MS);
+  Serial.print(F("ms,STOP<="));     Serial.print(BRAKE_STOP_COUNTS);
+  Serial.print(F(",MIN,"));         Serial.print(BRAKE_MIN_MS);
+  Serial.print(F(",MAX,"));         Serial.println(BRAKE_MAX_MS);
   Serial.print(F("HOLD_PWM_MAX,")); Serial.println(HOLD_PWM_MAX);
+  //  ★ v36: 엔코더 설정을 반드시 찍는다.
+  //    어느 디바운스로 도는지 로그로 알 수 없어서 문제를 못 찾았었다.
+  Serial.print(F("ENCODER,CPR,"));      Serial.print(ENCODER_CPR, 1);
+  Serial.print(F(",DEBOUNCE_US,"));     Serial.print(ENCODER_DEBOUNCE_US);
+  Serial.print(F(",UPDATE_MS,"));       Serial.println(ENCODER_UPDATE_MS);
+  Serial.println(F("ENCODER_NOTE,counts_per_meter 199.8 은 DEBOUNCE 200us 기준"));
+  Serial.print(F("ANTIROLL,"));     Serial.print(antiRollEnabled ? F("ON") : F("OFF"));
+  Serial.print(F(",PWM,"));         Serial.print(antiRollPwm);
+  Serial.print(F(",COUNTS,"));      Serial.print(ANTIROLL_COUNTS);
+  Serial.print(F(",HOLD,"));        Serial.print(ANTIROLL_HOLD_MIN_MS);
+  Serial.print('~');                Serial.println(ANTIROLL_HOLD_MAX_MS);
   Serial.print(F("STEER_ENC_PIN,")); Serial.print(PIN_STEER_ENC_A);
   Serial.print(',');                 Serial.println(PIN_STEER_ENC_B);
 
@@ -1705,11 +2397,15 @@ void loop()
     steerRunning           = false;
     brakeActive            = false;   // v29
     holdActive             = false;   // v29
+    antiRollHolding        = false;   // v35
+    antiRollArmed          = false;   // v35: 복귀 후 다시 기준점을 잡게 한다
+    antiRollStillMs        = 0;
     seekPhase              = SEEK_OFF; // v31
   }
   else {
     updateBrake(now);                 // v29: 램프보다 먼저
     updateHold(now);                  // v29
+    updateAntiRoll(now);              // v35: 홀딩 다음. 램프보다는 먼저
     updateSeek(now);                  // v31: 조향 폐루프
     updateDriveWatchdog(now);
     updateDriveController(now);
