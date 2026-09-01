@@ -90,12 +90,45 @@ class ManagerNode(Node):
         #     목록으로 동작한다. 그것도 에러 없이 조용히.
         self.declare_parameter("known_modes", Parameter.Type.STRING_ARRAY)
 
+        # ---------- 모드 별칭 (0831) ----------
+        #   "옛이름:새이름" 목록. 들어온 모드를 발행 전에 갈아끼운다.
+        #
+        #   ★ 왜 필요한가
+        #     구간을 번호(1~11)로 바꾸는 중인데, GPS팀 route_follower 는
+        #     아직 이름("S_COURSE")을 발행한다. 별칭이 없으면 그 이름이
+        #     known_modes 에 없어 거부되고, policy=keep 이라 직전 모드가
+        #     그대로 유지된다. **에러 없이 조용히 안 바뀐다.**
+        #     0829 의 /vehicle_mode 사태와 완전히 같은 함정이다.
+        #
+        #     별칭을 두면 두 팀이 동시에 안 바꿔도 된다.
+        #     GPS팀이 번호로 바꾸면 이 목록만 비우면 끝난다.
+        self.declare_parameter("mode_aliases", Parameter.Type.STRING_ARRAY)
+
+        # ---------- 회피 게이트 (0831) ----------
+        #   지정된 구간에서, 게이트 신호가 참일 때만 그 소스의
+        #   **구동과 조향을 둘 다** 받아들인다.
+        #
+        #   ★ 왜 MCU 가 막나
+        #     "라이다가 알아서 안 보내면 된다" 로 두면, 라이다 노드에 버그가
+        #     있거나 옛 버전이 돌 때 아무도 못 막는다. 명령을 실제로
+        #     차에 내보내는 곳은 여기뿐이라, 여기서 막아야 확실하다.
+        #
+        #   ⚠ 급정거(stop)는 게이트와 무관하게 항상 받는다. 안전이 우선이다.
+        #
+        #   빈 목록으로 두면 게이트를 끈다 (아무것도 안 막는다).
+        self.declare_parameter("avoidance_gate_topic", "/avoidance/active")
+        self.declare_parameter("avoidance_gate_modes", Parameter.Type.STRING_ARRAY)
+        self.declare_parameter("avoidance_gate_sources", ["lidar"])
+        #  신호가 이 시간보다 오래되면 끊긴 것으로 보고 막는다.
+        self.declare_parameter("avoidance_gate_timeout_s", 1.0)
+
         # 알 수 없는 모드가 왔을 때:
         #   keep    = 직전 모드 유지 (권장. 갑자기 조향 권한이 바뀌지 않는다)
         #   default = 기본 소유자로 (기존 동작)
         self.declare_parameter("unknown_mode_policy", "keep")
         # 권한 소스가 값을 안 줄 때: center(0도) | hold_last
         self.declare_parameter("wheel_failsafe_mode", "center")
+        self.declare_parameter("stop_on_wheel_source_loss", True)
 
         # ---------- 급정거 ----------
         # 이 소스들의 /<src>_stop 이 true 면 즉시 정지
@@ -181,6 +214,41 @@ class ManagerNode(Node):
         self.known_modes = [str(m).strip().upper()
                             for m in (_modes_raw or [])
                             if str(m).strip()]
+        #  별칭 표 만들기 ("S_COURSE:5" → {"S_COURSE": "5"})
+        try:
+            _alias_raw = gp("mode_aliases")
+        except Exception:
+            _alias_raw = None
+        self.mode_aliases = {}
+        for entry in (_alias_raw or []):
+            text = str(entry).strip()
+            if not text:
+                continue
+            if ":" not in text:
+                raise ValueError("mode_aliases 형식은 옛이름:새이름 : %s" % text)
+            old, new = text.split(":", 1)
+            old, new = old.strip().upper(), new.strip().upper()
+            if not old or not new:
+                raise ValueError("mode_aliases 항목이 비었다: %s" % text)
+            self.mode_aliases[old] = new
+
+        try:
+            _av_raw = gp("avoidance_gate_modes")
+        except Exception:
+            _av_raw = None
+        self.gate_modes = set(
+            str(m).strip().upper() for m in (_av_raw or []) if str(m).strip())
+        self.gate_sources = [str(v).strip().lower()
+                             for v in (gp("avoidance_gate_sources") or [])
+                             if str(v).strip()]
+        for src in self.gate_sources:
+            if src not in self.source_names:
+                raise ValueError(
+                    "avoidance_gate_sources 에 알 수 없는 소스: %s" % src)
+        self.gate_timeout = float(gp("avoidance_gate_timeout_s"))
+        self.gate_value = False         # 마지막으로 받은 게이트 값
+        self.gate_at = 0.0              # 그 시각
+
         self.unknown_mode_policy = str(gp("unknown_mode_policy")).strip().lower()
         if self.unknown_mode_policy not in ("keep", "default"):
             raise ValueError("unknown_mode_policy 는 keep 또는 default")
@@ -188,6 +256,11 @@ class ManagerNode(Node):
             gp("wheel_owner_default"), gp("wheel_owner_overrides"),
             self.source_names, self.known_modes)
         self.unknown_mode_seen = ""     # 같은 오타를 한 번만 찍기 위한 기록
+        #  조향 권한 경고 도배 방지 (0831)
+        self._wheel_warn_key = ""
+        self._wheel_warn_at = 0.0
+        self._alias_seen = ""           # 별칭 안내를 한 번만 찍기 위한 기록
+        self._gate_last = "init"        # 게이트 상태가 바뀔 때만 로깅
         self.safety = SafetyManager(
             drive_validation_mode=gp("drive_validation_mode"),
             drive_allowed_values=gp("drive_allowed_values"),
@@ -291,6 +364,12 @@ class ManagerNode(Node):
         self.pub_safety = self.create_publisher(
             String, str(gp("status_safety_topic")), 10)
         self.pub_ready = self.create_publisher(Bool, str(gp("status_ready_topic")), 10)
+        #  게이트는 **구독**한다. 라이다 회피 노드가 발행한다.
+        _gate_t = str(gp("avoidance_gate_topic"))
+        if self.gate_modes:
+            self.create_subscription(Bool, _gate_t, self._cb_gate, 10)
+            self._sub_specs.append(
+                (_gate_t, "std_msgs/msg/Bool", "회피 게이트"))
 
         self.timer = self.create_timer(1.0 / publish_hz, self._tick)
 
@@ -405,8 +484,95 @@ class ManagerNode(Node):
         if bool(msg.data) and not prev:
             self.get_logger().warn("급정거 요청: %s" % source)
 
+    def _warn_wheel_owner(self, reason):
+        """조향 권한자가 값을 안 줄 때, 무엇을 고쳐야 하는지까지 찍는다."""
+        now = time.monotonic()
+        key = "%s|%s" % (self.mode, reason)
+        if key == self._wheel_warn_key and now - self._wheel_warn_at < 5.0:
+            return
+        self._wheel_warn_key = key
+        self._wheel_warn_at = now
+
+        owner = self.wheel_gate.owner(self.mode)
+        overrides = ["%s:%s" % (m, o)
+                     for m, o in sorted(self.wheel_gate.overrides.items())]
+
+        self.get_logger().warn(
+            "조향이 중앙으로 고정된다 — 지금 모드 '%s' 의 조향 권한자는 '%s' 인데 "
+            "그쪽에서 값이 안 온다 (%s).\n"
+            "  · 안전설정에 따라 구동 0과 정지를 발행한다.\n"
+            "  · 이 구간을 다른 센서로 돌리려면 yaml 의 wheel_owner_overrides 에 "
+            "'%s:<소스>' 를 넣을 것.\n"
+            "  · 지금 설정: 기본 권한자=%s, 예외=%s\n"
+            "  · 권한자가 맞다면 그쪽 노드가 조향값을 발행하는지 확인할 것."
+            % (self.mode, owner, reason, self.mode,
+               self.wheel_gate.default_owner,
+               (", ".join(overrides) if overrides else "없음")))
+
+    def _cb_gate(self, msg):
+        """회피 게이트 신호. 라이다 회피 노드가 발행한다."""
+        self.gate_value = bool(msg.data)
+        self.gate_at = time.monotonic()
+
+    def _apply_gate(self, now):
+        """지금 막아야 할 소스를 정해 InputManager 에 알린다.
+
+        규칙
+          · 지금 모드가 gate_modes 에 없으면 아무것도 안 막는다
+          · 있으면, 게이트가 참이고 신호가 살아 있을 때만 통과
+          · 신호가 아예 안 오거나 오래되면 **막는다** (안전 우선)
+
+        반환: 게이트 상태 문자열 (없으면 None)
+        """
+        if not self.gate_modes or self.mode not in self.gate_modes:
+            self.inputs.set_blocked({})
+            return None
+
+        fresh = (self.gate_at > 0.0 and
+                 (now - self.gate_at) <= self.gate_timeout)
+        if not fresh:
+            reason = "gate_no_signal" if self.gate_at == 0.0 else "gate_stale"
+        elif not self.gate_value:
+            reason = "gate_false"
+        else:
+            reason = None
+
+        if reason is None:
+            self.inputs.set_blocked({})
+        else:
+            self.inputs.set_blocked({s: reason for s in self.gate_sources})
+
+        if reason != self._gate_last:
+            self._gate_last = reason
+            if reason is None:
+                self.get_logger().info(
+                    "회피 게이트 열림 (모드 %s) — %s 의 구동·조향을 받는다"
+                    % (self.mode, ", ".join(self.gate_sources)))
+            else:
+                self.get_logger().warn(
+                    "회피 게이트 닫힘 (모드 %s, 사유 %s) — %s 의 구동·조향을 "
+                    "받지 않는다. 급정거는 그대로 받는다.\n"
+                    "  · gate_false     회피 노드가 false 를 보내는 중\n"
+                    "  · gate_no_signal %s 를 한 번도 못 받았다\n"
+                    "  · gate_stale     %.1f초 넘게 안 온다"
+                    % (self.mode, reason, ", ".join(self.gate_sources),
+                       str(self.get_parameter("avoidance_gate_topic").value),
+                       self.gate_timeout))
+        return reason
+
     def _cb_mode(self, msg):
-        new_mode = str(msg.data).strip().upper()
+        raw_mode = str(msg.data).strip().upper()
+
+        # ---- 별칭 치환 (0831) ----
+        #   옛 이름으로 와도 새 번호로 바꿔서 처리한다.
+        #   바뀐 사실은 처음 한 번만 알린다 (도배 방지).
+        new_mode = self.mode_aliases.get(raw_mode, raw_mode)
+        if new_mode != raw_mode and raw_mode != self._alias_seen:
+            self._alias_seen = raw_mode
+            self.get_logger().info(
+                "모드 별칭: '%s' → '%s' 로 받는다. "
+                "발행하는 쪽이 번호로 바꾸면 yaml 의 mode_aliases 에서 지울 것."
+                % (raw_mode, new_mode))
 
         # ---- 모드 문자열 검증 ----
         # 오타 하나가 조향 권한을 통째로 바꾼다. 조용히 넘기지 않는다.
@@ -473,9 +639,30 @@ class ManagerNode(Node):
                           "EMERGENCY_STOP(%s)" % ",".join(stopping), False)
             return
 
+        # ---- [2-b] 회피 게이트 (0831) ----
+        #   지정 구간에서 게이트가 열려 있을 때만 그 소스의 구동·조향을
+        #   받아들인다. 급정거는 위 [2] 에서 이미 처리했으므로 영향 없다.
+        gate_reason = self._apply_gate(now)
+
         # ---- [5] 조향: 모드 게이트 (구동과 독립) ----
         wheel_value, wheel_used, wheel_ok, wheel_reason = self.wheel_gate.resolve(
             self.mode, self.inputs, now, self.wheel_timeout, self._failsafe_wheel())
+
+        #  🔴 0831 추가 — "구간 연습이 안 된다" 의 최다 원인을 말로 알려준다.
+        #
+        #    조향 권한은 모드가 정한다. 어떤 구간에서 권한자가 값을 안 주면
+        #    차는 조향을 중앙에 두고 직진만 한다. 예전에는 safety_state 에
+        #    WHEEL_FALLBACK(camera:never_received) 한 줄만 남아서, 왜 안 도는지
+        #    알려면 이 코드를 읽어야 했다. 실제로 S자 코스 연습이 이것 때문에 막혔다.
+        if not wheel_ok:
+            self._warn_wheel_owner(wheel_reason)
+
+        if (not wheel_ok and
+                bool(self.get_parameter("stop_on_wheel_source_loss").value)):
+            self._publish(0.0, self._failsafe_wheel(), True,
+                          "stop", "stop",
+                          "WHEEL_SOURCE_LOST(%s)" % wheel_reason, False)
+            return
 
         faults = []
 
@@ -505,6 +692,9 @@ class ManagerNode(Node):
                 faults.append("NO_DRIVE_SOURCE(%s)" % ",".join(tried))
             else:
                 drive_src = src
+
+        if gate_reason:
+            faults.append("AVOID_GATE(%s)" % gate_reason)
 
         if not wheel_ok:
             faults.append("WHEEL_FALLBACK(%s)" % wheel_reason)
@@ -541,6 +731,8 @@ class ManagerNode(Node):
         m = String(); m.data = status.safety_state; self.pub_safety.publish(m)
         r = Bool(); r.data = status.ready; self.pub_ready.publish(r)
 
+
+
         if status != self.last_status:
             self.get_logger().info(
                 "mode=%s drive=%s wheel=%s safety=%s"
@@ -558,7 +750,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

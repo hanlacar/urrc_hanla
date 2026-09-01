@@ -6,7 +6,7 @@ camera_path_planner_node:
     camera_optical_frame_id: "" # Empty: lock to first CameraInfo.header.frame_id.
     # Measured vertical distance from the ground to the camera lens center.
     # Measured from rear axle centre to camera lens centre.
-    camera_x_m: 0.38
+    camera_x_m: 0.41
     camera_y_m: 0.0
     camera_z_m: 0.96
     camera_mount_roll_deg: 0.0
@@ -30,7 +30,7 @@ camera_path_planner_node:
     bev_turn_lateral_m: 1.5
     # Sections 3 and 5 use the wider curve view.
     bev_s_curve_lateral_m: 1.5
-    # Sections 4/6/8: use a narrow view, 1.0 m on each side of base_link.
+    # Sections 4/6/8/11: use a narrow intersection view.
     bev_intersection_lateral_m: 1.0
     bev_resolution_m_per_pixel: 0.02
     lane_width_m: 0.8
@@ -66,21 +66,21 @@ camera_path_controller_node:
   ros__parameters:
     # Measured body width. Path clearance uses this configured footprint width.
     vehicle_width_m: 0.77
-    # Measured axle-centre distance: rear-to-camera 0.38 + camera-to-front 0.39.
+    # Measured axle-centre distance: rear-to-camera 0.41 + camera-to-front 0.32.
     vehicle_length_m: 1.30
     front_overhang_m: 0.26
     rear_overhang_m: 0.26
-    wheelbase_m: 0.77
+    wheelbase_m: 0.73
     min_lookahead_m: 0.8
     max_lookahead_m: 1.5
     lookahead_speed_gain: 1.0
     max_steering_deg: 27.0
-    steering_rate_limit_deg_s: 60.0
+    steering_rate_limit_deg_s: 20.0
     # Match the T870 v29 discrete drive speeds. Stage 3/PWM 150 is 0.900 m/s
     # and is selected explicitly by the section-9 traffic20 mission logic.
-    normal_speed_mps: 0.526
+    normal_speed_mps: 0.455
     turn_speed_mps: 0.229
-    single_boundary_speed_mps: 0.526
+    single_boundary_speed_mps: 0.455
     road_only_speed_mps: 0.229
     max_lateral_accel_mps2: 1.0
     accel_limit_mps2: 0.5

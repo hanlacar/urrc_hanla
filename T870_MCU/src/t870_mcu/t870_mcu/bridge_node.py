@@ -81,6 +81,7 @@ import serial
 
 from .diagnostics import check_subscriptions
 from .protocol import (
+    encoder_sanity,
     parse_drive_stage,
     drive_serial_command,
     valid_wheel_deg,
@@ -257,6 +258,11 @@ class McuBridge(Node):
         self.declare_parameter("counts_per_meter", 0.0)
         self.declare_parameter("wheelbase_m", 0.73)
         self.declare_parameter("encoder_signed", False)
+        #  엔코더 누적값이 1초에 이보다 많이 변하면 시리얼이 깨진 것으로 본다.
+        #  199.8 counts/m 기준 2000 = 10 m/s. 이 차의 최고속(약 0.8m/s)의 12배라
+        #  정상 주행은 절대 안 걸리고, 필드가 밀린 값만 걸러진다.
+        #  0 으로 두면 이 검사를 끈다.
+        self.declare_parameter("encoder_max_counts_per_s", 2000.0)
         self.declare_parameter("odom_frame", "odom")
         self.declare_parameter("base_frame", "base_link")
         self.declare_parameter("publish_tf", True)
@@ -355,6 +361,7 @@ class McuBridge(Node):
         self.cpm = float(gp("counts_per_meter"))
         self.wheelbase = float(gp("wheelbase_m"))
         self.encoder_signed = bool(gp("encoder_signed"))
+        self.enc_max_cps = float(gp("encoder_max_counts_per_s"))
         self.odom_frame = str(gp("odom_frame"))
         self.base_frame = str(gp("base_frame"))
         self.publish_tf = bool(gp("publish_tf"))
@@ -437,6 +444,12 @@ class McuBridge(Node):
         self.var_yaw = 0.0
         self._tf_warned = False       # TF 실패 경고를 한 번만
         self._odom_warned = False     # odom 실패 경고도 한 번만
+
+        # 🔴 엔코더 누적값 검증 상태 (0829)
+        self._enc_last_good = None
+        self._enc_last_good_t = time.monotonic()
+        self._enc_bad = 0
+        self._enc_warn_at = 0.0
         self._last_rx_error = ""      # 같은 수신 오류를 반복해 찍지 않기 위해
         self._last_fw_state = ""      # 펌웨어 상태 전환 감지용
 
@@ -716,6 +729,41 @@ class McuBridge(Node):
         response.success = True
         response.message = "E-stop latch cleared; fresh ROS commands are still required"
         return response
+
+    def _sane_encoder(self, value):
+        """엔코더 누적값을 검증한다. 못 믿으면 None.
+
+        두 가지를 본다.
+          1. 파싱 실패(None)          → 필드가 깨졌다
+          2. 물리적으로 불가능한 점프  → 필드가 밀렸거나 두 줄이 붙었다
+
+        둘 다 시리얼 노이즈에서 온다. 특히 제동(역토크) 순간에 몰린다.
+        믿을 수 없으면 발행하지 않고 직전 값을 유지한다.
+        """
+        now = time.monotonic()
+        dt = now - self._enc_last_good_t
+
+        ok, why = encoder_sanity(value, self._enc_last_good, dt, self.enc_max_cps)
+        if not ok:
+            self._enc_bad += 1
+            self._warn_encoder(why)
+            return None
+
+        self._enc_last_good = value
+        self._enc_last_good_t = now
+        self._enc_bad = 0
+        return value
+
+    def _warn_encoder(self, why):
+        """같은 경고로 로그를 도배하지 않는다."""
+        now = time.monotonic()
+        if now - self._enc_warn_at < 2.0:
+            return
+        self._enc_warn_at = now
+        self.get_logger().warn(
+            "%s — 이 STATUS 는 버린다 (연속 %d회). "
+            "시리얼 노이즈일 가능성이 크다. 제동 순간에 몰리면 "
+            "엔코더 배선을 모터선과 분리할 것." % (why, self._enc_bad))
 
     def cb_reset_odom(self, _request, response):
         """오도메트리를 원점으로. 누적 공분산도 함께 0 으로 되돌린다."""
@@ -1023,9 +1071,15 @@ class McuBridge(Node):
         m = String(); m.data = status["fault_text"]; self.pub_fault_text.publish(m)
         m = Int32(); m.data = status["adc"]; self.pub_a0.publish(m)
         m = Float32(); m.data = status["rpm"]; self.pub_rpm.publish(m)
-        m = Int32(); m.data = status["encoder_count"]; self.pub_drive.publish(m)
-        if self.pub_drive_legacy:
-            self.pub_drive_legacy.publish(m)
+        #  🔴 엔코더 누적값은 깨졌으면 발행하지 않는다 (0829)
+        #    예전에는 못 읽으면 0 이 나갔다. 누적 카운터에 0 이 튀면
+        #    구독자 쪽에서는 "주행 중 갑자기 원점으로 초기화" 로 보인다.
+        #    제동 순간 역토크 펄스가 시리얼에 노이즈를 실어 정확히 그때 났다.
+        enc = self._sane_encoder(status["encoder_count"])
+        if enc is not None:
+            m = Int32(); m.data = enc; self.pub_drive.publish(m)
+            if self.pub_drive_legacy:
+                self.pub_drive_legacy.publish(m)
         m = Int32(); m.data = status["steer_ms"]; self.pub_steer_ms.publish(m)
 
         steer_deg = status["steer_ms"] / self.ms_per_deg
@@ -1078,7 +1132,8 @@ class McuBridge(Node):
 
         # 오도메트리는 마지막. 여기서 문제가 나도 안전·구동에는 영향이 없다.
         try:
-            self.update_odom(status["encoder_count"], status["steer_ms"])
+            if enc is not None:
+                self.update_odom(enc, status["steer_ms"])
         except Exception as exc:
             if not self._odom_warned:
                 self._odom_warned = True
@@ -1300,7 +1355,8 @@ def main(args=None):
     finally:
         node.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

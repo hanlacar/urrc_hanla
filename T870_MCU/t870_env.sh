@@ -12,8 +12,8 @@
 
 # ---- 팀 합의값 ----
 #  2026-08-29 기준 실제로 팀이 쓰고 있는 값을 그대로 넣었다.
-#  (팀원 PC 확인: ROS_DOMAIN_ID=77, RMW=rmw_fastrtps_cpp)
-export ROS_DOMAIN_ID=77
+#  현재 차량 전체 노드 합의값: ROS_DOMAIN_ID=10
+export ROS_DOMAIN_ID=10
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 # 다른 PC 의 노드가 보여야 하므로 켜 두면 안 된다

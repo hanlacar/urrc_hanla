@@ -4,8 +4,8 @@ arduino_serial_bridge_node:
     baudrate: 115200
     encoder_topic: /inpulse
     rpm_topic: /rpm
-    # Calibrated encoder scale supplied by the vehicle: 543 counts/m.
-    encoder_counts_per_meter: 543.0
+    # 2026-08-29 measurement: 955 counts / 4.78 m at 200 us debounce.
+    encoder_counts_per_meter: 199.8
     speed_mps_topic: /vehicle/speed_mps
     speed_kph_topic: /vehicle/speed_kph
     speed_valid_topic: /vehicle/speed_valid
@@ -63,7 +63,7 @@ arduino_serial_bridge_node:
     calibration_input_timeout_sec: 0.3
     calibration_minimum_distance_m: 0.2
     calibration_maximum_yaw_deg: 20.0
-    calibration_wheelbase_m: 0.77
+    calibration_wheelbase_m: 0.73
     # IMU +Yaw is left/CCW; this vehicle's +steering command is right.
     calibration_yaw_to_steering_sign: 1.0
     calibration_maximum_trim_deg: 5.0

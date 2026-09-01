@@ -30,9 +30,9 @@ class VehicleInterfaceNode(Node):
             "target_timeout_sec": 0.3,
             "command_rate_hz": 20.0,
             "maximum_steering_deg": 27.0,
-            # T870 v29: ROS stage 2 -> firmware 3.00, PWM 100 = 0.526 m/s.
+            # Loaded T870: ROS stage 2 -> firmware 3.00, PWM 100 = 0.455 m/s.
             "maximum_abs_stage": 3,
-            "stage_per_mps": 3.8022813688,
+            "stage_per_mps": 4.3956043956,
             "stage_sign": 1.0,
             "steering_sign": 1.0,
         }

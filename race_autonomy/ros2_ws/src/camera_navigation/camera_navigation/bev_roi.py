@@ -1,8 +1,8 @@
 """Mission-aware lateral bounds for the camera bird's-eye-view ROI."""
 
 
-INTERSECTION_SECTIONS = frozenset((4, 6, 8))
-FIXED_NORMAL_SECTIONS = frozenset((1, 2, 7, 9, 10, 11))
+INTERSECTION_SECTIONS = frozenset((4, 6, 8, 11))
+FIXED_NORMAL_SECTIONS = frozenset((1, 2, 7, 9, 10))
 CURVE_SECTIONS = frozenset((3, 5))
 
 

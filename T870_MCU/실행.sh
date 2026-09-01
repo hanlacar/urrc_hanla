@@ -21,8 +21,11 @@ fi
 # shellcheck disable=SC1090
 . "$HERE/t870_env.sh"
 
-# ROS setup scripts may inspect optional variables that are not defined yet.
-# Enable nounset only after the environment has been sourced.
+#  ★ set -u 는 반드시 ROS 소싱 "뒤"에 켠다.
+#    ROS/colcon 의 setup.bash 는 정의되지 않은 변수를 참조한다
+#    ($COLCON_TRACE 등). set -u 가 켜져 있으면 그 줄에서
+#    "unbound variable" 로 스크립트가 그대로 죽는다.
+#    (0829: 이 순서를 반대로 두어 실행이 안 됐다. 라이다팀이 잡아줌)
 set -u
 
 MODE="${1:-실행}"

@@ -78,6 +78,20 @@ def _to_int(text, default=0):
         return default
 
 
+def _to_int_or_none(text):
+    """읽을 수 없으면 0 이 아니라 None 을 준다.
+
+    🔴 0829: 누적 카운터에 기본값 0 을 주면 안 된다.
+      제동 순간(역토크 펄스)에 시리얼 노이즈로 필드가 깨지면
+      엔코더 누적값이 조용히 0 으로 발행되어 "멈추면 초기화" 로 보인다.
+      실제로 그 증상이 났다. 못 읽었으면 못 읽었다고 말해야 한다.
+    """
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
 def _to_float(text, default=0.0):
     try:
         value = float(text)
@@ -86,11 +100,45 @@ def _to_float(text, default=0.0):
     return value if math.isfinite(value) else default
 
 
+def encoder_sanity(value, last, dt, max_cps):
+    """엔코더 누적값을 믿어도 되는지. (믿어도_되나, 이유) 를 준다.
+
+    ROS 없이 시험할 수 있도록 순수 함수로 둔다.
+
+    value    이번 STATUS 에서 읽은 누적 카운트. 못 읽었으면 None
+    last     마지막으로 믿었던 값. 처음이면 None
+    dt       마지막 값 이후 흐른 시간 [s]
+    max_cps  초당 허용 변화량. 0 이하면 점프 검사를 하지 않는다
+
+    🔴 왜 필요한가 (0829)
+      제동은 역토크 펄스라 전기 노이즈가 가장 큰 순간이다. 그때 시리얼이
+      깨지면 필드가 밀리거나 문자가 섞인다. 예전에는 그걸 못 읽으면
+      그냥 0 을 발행했고, 누적 카운터에 0 이 튀니 구독자 쪽에서는
+      "달리다가 멈추면 엔코더가 초기화된다" 로 보였다.
+    """
+    if value is None:
+        return False, "필드를 읽을 수 없다"
+
+    if last is None or max_cps <= 0.0:
+        return True, ""
+
+    if dt <= 0.0:
+        dt = 1e-3
+    #  전진↔후진 전환에서 부호가 뒤집히므로 여유(50)를 더 준다
+    limit = max_cps * dt + 50.0
+    moved = abs(value - last)
+    if moved > limit:
+        return False, ("%d → %d 로 %.2f초 만에 %d 카운트 튀었다 (한계 %.0f)"
+                       % (last, value, dt, moved, limit))
+    return True, ""
+
+
 def parse_status(line: str, fault_ok_values=DEFAULT_FAULT_OK_VALUES):
     """STATUS 라인을 파싱한다.
 
     반환 dict:
         raw            원문
+        encoder_count  int 또는 **None** (필드가 깨져 못 읽은 경우)
         state          상태머신 문자열 (READY/ACTIVE/FAULT/ESTOP/...)
         fault_text     fault 필드 원문 ("NONE" 등)
         fault          0 = 정상, 1 = fault (fault_ok_values 에 없으면 1)
@@ -123,7 +171,8 @@ def parse_status(line: str, fault_ok_values=DEFAULT_FAULT_OK_VALUES):
         "fault": fault_code,
         "adc": _to_int(fields[3]),
         "rpm": _to_float(fields[6]),
-        "encoder_count": _to_int(fields[7]),
+        #  ★ 못 읽으면 None. 호출한 쪽이 "직전 값 유지" 를 하도록 한다.
+        "encoder_count": _to_int_or_none(fields[7]),
         "steer_ms": _to_int(fields[8]) if len(fields) > 8 else 0,
         "steer_target_ms": _to_int(fields[9]) if len(fields) > 9 else 0,
         "steer_limit_ms": _to_int(fields[10]) if len(fields) > 10 else 0,

@@ -45,7 +45,7 @@ class ArduinoSerialBridgeNode(Node):
             "speed_kph_topic": "/vehicle/speed_kph",
             "speed_valid_topic": "/vehicle/speed_valid",
             "distance_m_topic": "/vehicle/distance_m",
-            "encoder_counts_per_meter": 543.0,
+            "encoder_counts_per_meter": 199.8,
             "steering_topic": "/steer_angle",
             "steering_position_topic": "/steer_position_ms",
             "steering_a0_topic": "/steer_a0",
@@ -83,7 +83,7 @@ class ArduinoSerialBridgeNode(Node):
             "calibration_input_timeout_sec": 0.3,
             "calibration_minimum_distance_m": 0.2,
             "calibration_maximum_yaw_deg": 20.0,
-            "calibration_wheelbase_m": 0.78,
+            "calibration_wheelbase_m": 0.73,
             "calibration_yaw_to_steering_sign": 1.0,
             "calibration_maximum_trim_deg": 5.0,
         }

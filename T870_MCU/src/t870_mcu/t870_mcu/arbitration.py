@@ -78,6 +78,11 @@ class InputManager:
             raise ValueError("duplicate command source name")
         self.states: Dict[str, SourceState] = {n: SourceState() for n in names}
 
+        #  🔴 0831 — 게이트로 막힌 소스
+        #    구동·조향 둘 다 "값이 없는 것" 으로 취급한다.
+        #    급정거(stop)는 절대 막지 않는다. 안전은 게이트보다 위다.
+        self.blocked: Dict[str, str] = {}
+
     # ---- 갱신 ----
 
     def update_drive(self, source, value, now, valid, reason) -> None:
@@ -91,7 +96,13 @@ class InputManager:
 
     # ---- 조회 ----
 
+    def set_blocked(self, blocked: Dict[str, str]) -> None:
+        """{소스: 사유} 로 막는다. 매 주기 통째로 갈아끼운다."""
+        self.blocked = dict(blocked or {})
+
     def drive_status(self, source, now, timeout_s) -> Tuple[bool, str, float]:
+        if source in self.blocked:
+            return False, self.blocked[source], self.states[source].drive.value
         st = self.states[source].drive
         if not st.valid:
             return False, st.reason, st.value
@@ -100,6 +111,9 @@ class InputManager:
         return True, "ok", st.value
 
     def wheel_status(self, source, now, timeout_s) -> Tuple[bool, str, int]:
+        if source in self.blocked:
+            return (False, self.blocked[source],
+                    int(round(self.states[source].wheel.value)))
         st = self.states[source].wheel
         if not st.valid:
             return False, st.reason, int(round(st.value))
@@ -113,6 +127,7 @@ class InputManager:
         '최근에 true 로 온 것'만 유효하다. 오래된 true 를 계속 믿으면
         장애물이 치워져도 차가 영영 못 움직인다.
         """
+        #  ★ 게이트로 막힌 소스도 급정거는 받는다. 안전이 우선이다.
         st = self.states[source].stop
         if st.value < 0.5:
             return False
