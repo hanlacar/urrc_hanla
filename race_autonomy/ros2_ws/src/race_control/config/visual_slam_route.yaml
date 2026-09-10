@@ -1,6 +1,6 @@
 visual_slam_route:
   ros__parameters:
-    route_file: "/home/parkjinwoo/urrc_hanla/maps/test_20260909_191813_8xh0Le/route_optimized.json"
+    route_file: ""
     map_frame: "map"
     base_frame: "base_link"
     record_on_start: true

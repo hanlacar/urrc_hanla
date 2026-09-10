@@ -74,7 +74,7 @@ def setup(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("mode",default_value="mapping"),
-        DeclareLaunchArgument("database",default_value="/home/parkjinwoo/slam/maps/competition_d456.db"),
+        DeclareLaunchArgument("database",default_value=""),
         # D455 currently installed on the test vehicle.
         DeclareLaunchArgument("serial_no",default_value="338122302896"),
         DeclareLaunchArgument("rviz",default_value="true"),

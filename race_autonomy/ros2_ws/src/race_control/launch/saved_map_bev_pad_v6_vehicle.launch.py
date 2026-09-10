@@ -29,6 +29,7 @@ def generate_launch_description():
         DeclareLaunchArgument("class_manifest_path", default_value=default_manifest),
         DeclareLaunchArgument("device", default_value="cuda:0"),
         DeclareLaunchArgument("require_cuda", default_value="true"),
+        DeclareLaunchArgument("python_executable", default_value="python3"),
         LogInfo(msg=("PAD v6 REAL VEHICLE: starts disabled; valid saved-map, BEV, "
                      "Pure Pursuit and curvature plan are all required; first drive is PWM 40")),
         IncludeLaunchDescription(
@@ -48,6 +49,7 @@ def generate_launch_description():
                 "class_manifest_path": LaunchConfiguration("class_manifest_path"),
                 "device": LaunchConfiguration("device"),
                 "require_cuda": LaunchConfiguration("require_cuda"),
+                "python_executable": LaunchConfiguration("python_executable"),
                 "launch_rqt": LaunchConfiguration("launch_rqt")}.items()),
         Node(
             package="race_vehicle_interface",

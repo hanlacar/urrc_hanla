@@ -29,7 +29,7 @@ class VisualSlamRouteNode(Node):
         super().__init__("visual_slam_route")
         defaults = {
             "mode": "follow",
-            "route_file": "/home/parkjinwoo/slam/routes/competition_route.json",
+            "route_file": "",
             "map_frame": "map", "base_frame": "base_link",
             "record_on_start": True, "record_rate_hz": 10.0,
             "minimum_sample_distance_m": 0.10,

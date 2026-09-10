@@ -10,14 +10,14 @@ ARGUMENTS=(("segmentation_model_path",""),("class_manifest_path",""),("device","
 def generate_launch_description():
     share=Path(get_package_share_directory("camera_yolo_inference"));config=str(share/"config"/"yolo_inference.yaml");manifest=str(share/"config"/"class_manifest.yaml");model=str(share/"models"/"hanla_competition_11class_best.engine")
     declarations=[DeclareLaunchArgument(name,default_value=(manifest if name=="class_manifest_path" else model if name=="segmentation_model_path" else default)) for name,default in ARGUMENTS]
-    declarations.append(DeclareLaunchArgument("python_executable",default_value="/home/parkjinwoo/urrc_hanla/race_autonomy/ros2_ws/.yolo_runtime/bin/python"))
+    declarations.append(DeclareLaunchArgument("python_executable", default_value="python3"))
     declarations.append(DeclareLaunchArgument("launch_rqt",default_value="true"))
     params={name:LaunchConfiguration(name) for name,_ in ARGUMENTS}
     return LaunchDescription(declarations+[
         Node(package="camera_yolo_inference",executable="camera_yolo_inference_node",prefix=LaunchConfiguration("python_executable"),parameters=[config,params],output="screen"),
         Node(package="camera_yolo_inference",executable="stop_line_depth_node",
              name="stop_line_depth_node",
-             parameters=[{"depth_topic":"/camera/depth/image_raw",
+             parameters=[{"depth_topic":"/camera/camera/aligned_depth_to_color/image_raw",
                           "max_pair_age_sec":0.35,
                           "minimum_valid_pixels":20,
                           "roi_shrink_ratio":0.25}],

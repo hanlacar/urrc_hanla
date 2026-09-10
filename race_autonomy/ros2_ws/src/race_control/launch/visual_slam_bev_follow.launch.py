@@ -1,8 +1,7 @@
 """D455/RTAB-Map topics -> YOLO BEV correction -> saved-route Pure Pursuit.
 
-The D455 and RTAB-Map localization are intentionally not launched here. Start
-the existing /home/parkjinwoo/slam/localize.sh first so only one camera process
-owns the device.
+The D456 and RTAB-Map localization are intentionally not launched here. Start
+the localization launch first so only one camera process owns the device.
 """
 
 import os
@@ -37,6 +36,7 @@ def generate_launch_description():
             "class_manifest_path": LaunchConfiguration("class_manifest_path"),
             "device": LaunchConfiguration("device"),
             "require_cuda": LaunchConfiguration("require_cuda"),
+            "python_executable": LaunchConfiguration("python_executable"),
             "launch_rqt": LaunchConfiguration("launch_rqt"),
         }.items())
     planner = Node(
@@ -74,10 +74,7 @@ def generate_launch_description():
                 "path_valid_topic": "/camera/path_valid",
                 "path_confidence_topic": "/camera/path_confidence"}])
     return LaunchDescription([
-        DeclareLaunchArgument(
-            "route_file",
-            default_value=("/home/parkjinwoo/urrc_hanla/maps/"
-                           "test_20260909_191813_8xh0Le/route_optimized.json")),
+        DeclareLaunchArgument("route_file", default_value=""),
         DeclareLaunchArgument("commanded_speed_mps", default_value="0.0"),
         DeclareLaunchArgument("require_bev", default_value="true"),
         DeclareLaunchArgument("align_route_to_start", default_value="false"),
@@ -86,6 +83,7 @@ def generate_launch_description():
         DeclareLaunchArgument("class_manifest_path", default_value=default_manifest),
         DeclareLaunchArgument("device", default_value="cuda:0"),
         DeclareLaunchArgument("require_cuda", default_value="true"),
+        DeclareLaunchArgument("python_executable", default_value="python3"),
         LogInfo(msg="Hybrid follower starts locked at 0 m/s; D455 RTAB localization must already be running"),
         perception, planner, route, pursuit, speed,
     ])

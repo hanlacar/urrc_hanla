@@ -1,5 +1,27 @@
 # URRC Hanla 자율주행 차량
 
+## 새 컴퓨터에서 저장 맵 실차 실행
+
+Ubuntu 24.04 컴퓨터에서 저장소를 받은 뒤 다음 두 스크립트만 실행한다.
+첫 스크립트는 ROS 2 Jazzy, RealSense, RTAB-Map, ROS 의존성 및 YOLO 환경을
+설치하고, 저장소에 포함된 압축 지도를 복원한 뒤 워크스페이스를 빌드한다.
+
+```bash
+git clone https://github.com/hanlacar/urrc_hanla.git
+cd urrc_hanla
+./setup_saved_map_bev_vehicle.sh
+./run_saved_map_bev_vehicle.sh
+```
+
+설정 도중 `dialout` 그룹에 처음 추가됐다는 메시지가 나오면 로그아웃 후 다시
+로그인하고 실행한다. D456과 차량 MCU는 컴퓨터에 연결되어 있어야 한다.
+다른 D456 또는 MCU 포트를 사용할 때만 다음처럼 지정한다.
+
+```bash
+RACE_CAMERA_SERIAL=카메라시리얼 RACE_MCU_PORT=/dev/ttyACM1 \
+./run_saved_map_bev_vehicle.sh
+```
+
 이 저장소는 카메라 경로 생성·Pure Pursuit 제어·구간 미션 판단과
 T870 MCU 명령 중재기를 포함한다. ROS 2 Jazzy를 사용하며 모든 팀 노드는
 동일한 `ROS_DOMAIN_ID=10`에서 실행해야 한다.
