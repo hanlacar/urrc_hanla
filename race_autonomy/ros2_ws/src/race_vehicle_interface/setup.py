@@ -42,6 +42,10 @@ setup(
             "race_vehicle_interface.forward_stop_controller_node:main",
             "manual_keyboard_drive_node = "
             "race_vehicle_interface.manual_keyboard_drive_node:main",
+            "pad_v6_keyboard_node = "
+            "race_vehicle_interface.pad_v6_keyboard_node:main",
+            "pad_v6_autonomy_bridge_node = "
+            "race_vehicle_interface.pad_v6_autonomy_bridge_node:main",
             "cmd_mux_node = race_vehicle_interface.cmd_mux_node:main",
         ],
     },

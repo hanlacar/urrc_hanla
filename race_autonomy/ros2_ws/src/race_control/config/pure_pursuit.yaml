@@ -10,6 +10,8 @@ pure_pursuit:
     steering_topic: "/camera/target_steering_deg"
     target_speed_topic: "/camera/target_speed_mps"
     status_topic: "/control/pure_pursuit_status_json"
+    valid_topic: "/control/pure_pursuit_valid"
+    confidence_topic: "/control/pure_pursuit_confidence"
     lookahead_topic: "/control/lookahead_m"
     lookahead_point_topic: "/control/lookahead_point_json"
     # Measured front-axle to rear-axle center distance.
@@ -19,7 +21,7 @@ pure_pursuit:
     lookahead_gain_s: 1.0
     maximum_lookahead_m: 1.5
     maximum_steering_deg: 27.0
-    steering_rate_limit_deg_s: 20.0
+    steering_rate_limit_deg_s: 90.0
     steering_sign: 1.0
     # Confidence gating and last-good-path hold happen in the path planner.
     minimum_confidence: 0.0

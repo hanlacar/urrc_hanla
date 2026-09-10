@@ -36,6 +36,8 @@ class PurePursuitNode(Node):
             "steering_topic": "/camera/target_steering_deg",
             "target_speed_topic": "/camera/target_speed_mps",
             "status_topic": "/control/pure_pursuit_status_json",
+            "valid_topic": "/control/pure_pursuit_valid",
+            "confidence_topic": "/control/pure_pursuit_confidence",
             "lookahead_topic": "/control/lookahead_m",
             "lookahead_point_topic": "/control/lookahead_point_json",
             "wheelbase_m": 0.73,
@@ -49,7 +51,7 @@ class PurePursuitNode(Node):
             "control_rate_hz": 20.0,
             "commanded_speed_mps": 0.0,
             "allow_reverse": False,
-            "steering_rate_limit_deg_s": 20.0,
+            "steering_rate_limit_deg_s": 90.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -66,6 +68,9 @@ class PurePursuitNode(Node):
         self.steering_pub = self.create_publisher(Float32, self.param("steering_topic"), 10)
         self.speed_pub = self.create_publisher(Float32, self.param("target_speed_topic"), 10)
         self.status_pub = self.create_publisher(String, self.param("status_topic"), 10)
+        self.valid_pub = self.create_publisher(Bool, self.param("valid_topic"), 10)
+        self.confidence_pub = self.create_publisher(
+            Float32, self.param("confidence_topic"), 10)
         self.path_status_pub = self.create_publisher(String, "/control/path_status", 10)
         self.lookahead_pub = self.create_publisher(
             Float32, self.param("lookahead_topic"), 10
@@ -150,15 +155,20 @@ class PurePursuitNode(Node):
         now = time.monotonic()
         dt = max(0.0, now-self.last_control_time)
         self.last_control_time = now
-        maximum_change = float(self.param("steering_rate_limit_deg_s"))*dt
-        steering = max(self.limited_steering-maximum_change,
-                       min(raw_steering,self.limited_steering+maximum_change)) if valid else 0.0
+        rate_limit = float(self.param("steering_rate_limit_deg_s"))
+        maximum_change = rate_limit*dt
+        steering = (raw_steering if rate_limit <= 0.0 else
+                    max(self.limited_steering-maximum_change,
+                        min(raw_steering,self.limited_steering+maximum_change))) if valid else 0.0
         self.limited_steering = steering
         configured_speed = float(self.param("commanded_speed_mps"))
         reverse_refused = configured_speed < 0.0 and not bool(self.param("allow_reverse"))
         target_speed = configured_speed if valid and not reverse_refused else 0.0
         self.steering_pub.publish(Float32(data=float(steering)))
         self.speed_pub.publish(Float32(data=float(target_speed)))
+        self.valid_pub.publish(Bool(data=bool(valid)))
+        self.confidence_pub.publish(Float32(
+            data=float(self.confidence if valid else 0.0)))
         self.lookahead_pub.publish(Float32(data=float(lookahead)))
         self.lookahead_point_pub.publish(String(data=json.dumps({
             "path_valid": valid,

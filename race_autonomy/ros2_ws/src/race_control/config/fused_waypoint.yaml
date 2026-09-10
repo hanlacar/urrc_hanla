@@ -1,0 +1,22 @@
+fused_waypoint_node:
+  ros__parameters:
+    gps_topic: /fix
+    odom_topic: /mcu/odom
+    initial_index: 0
+    # BOTH waypoints are inside section 2. Fill after surveying the actual lines.
+    ramp_first_index: -1
+    ramp_stop_index: -1
+    # Fill after surveying the two acceleration signs (both in section 9).
+    acceleration_start_index: -1
+    acceleration_end_index: -1
+    # Distance from the route/GPS reference point to the vehicle front.
+    # Zero means the offsets refer to the localization reference, not the bumper.
+    front_offset_m: 0.0
+    innovation_m: 1.5
+    max_cross_track_m: 0.75
+    gps_max_std_m: 0.5
+    initial_window_m: 3.0
+    max_dr_sec: 3.0
+    max_dr_m: 2.0
+    max_std_m: 0.25
+    odom_timeout_sec: 0.3

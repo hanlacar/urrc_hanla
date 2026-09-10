@@ -1,6 +1,8 @@
 /camera/camera:
   ros__parameters:
     serial_no: "338122302896"
+    enable_infra1: false
+    enable_infra2: false
     enable_color: true
     rgb_camera.color_profile: "640x480x60"
     rgb_camera.color_format: "RGB8"
@@ -8,8 +10,9 @@
     color_qos: "SENSOR_DATA"
     # Color gain remains automatic under auto exposure. Wrapper 4.58.1 has no
     # separate rgb_camera.enable_auto_gain launch parameter.
-    enable_depth: false
-    depth_module.depth_profile: "640x480x30"
+    # 정지선 거리는 aligned Depth만 사용한다.
+    enable_depth: true
+    depth_module.depth_profile: "640x480x15"
     depth_qos: "SENSOR_DATA"
     enable_infra: false
     enable_infra1: false
@@ -23,8 +26,8 @@
     enable_motion: false
     unite_imu_method: 0
     pointcloud.enable: false
-    align_depth.enable: false
-    enable_sync: false
+    align_depth.enable: true
+    enable_sync: true
     enable_rgbd: false
     publish_tf: false
     wait_for_device_timeout: 10.0

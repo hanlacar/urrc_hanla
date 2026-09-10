@@ -15,12 +15,12 @@ def generate_launch_description():
     params={name:LaunchConfiguration(name) for name,_ in ARGUMENTS}
     return LaunchDescription(declarations+[
         Node(package="camera_yolo_inference",executable="camera_yolo_inference_node",prefix=LaunchConfiguration("python_executable"),parameters=[config,params],output="screen"),
-        Node(package="camera_yolo_inference",executable="stop_line_ground_node",
-             parameters=[{"camera_x_m":.41,"camera_y_m":0.,"camera_z_m":.96,
-                          "camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,
-                          "camera_mount_yaw_deg":0.}],
-             remappings=[("/camera/camera_info",
-                          LaunchConfiguration("input_camera_info_topic"))],
+        Node(package="camera_yolo_inference",executable="stop_line_depth_node",
+             name="stop_line_depth_node",
+             parameters=[{"depth_topic":"/camera/depth/image_raw",
+                          "max_pair_age_sec":0.35,
+                          "minimum_valid_pixels":20,
+                          "roi_shrink_ratio":0.25}],
              output="screen"),
         TimerAction(period=2.0, actions=[
             Node(package="rqt_image_view",executable="rqt_image_view",name="camera_input_view",arguments=[LaunchConfiguration("input_image_topic")],condition=IfCondition(LaunchConfiguration("launch_rqt")),output="screen"),

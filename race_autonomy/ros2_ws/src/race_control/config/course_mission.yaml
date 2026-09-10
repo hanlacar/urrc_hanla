@@ -1,26 +1,41 @@
 course_mission_node:
   ros__parameters:
-    ramp_pitch_deg: 15.0
-    # Require a stable incline before starting the ramp maneuver.
-    ramp_pitch_confirm_sec: 0.5
+    waypoint_control: true
+    input_guard_topic: "/mission/route_valid"
+    # Stop reference is the fused route target, with braking distance compensation.
+    waypoint_stop_tolerance_m: 0.25
+    waypoint_deceleration_mps2: 0.5
+    waypoint_command_latency_sec: 0.15
+    # Legacy Bool adapter, unused when waypoint_control is true.
+    ramp_dr_stop_topic: ""
+    # Decision filter on complementary-filtered Pitch; tune with vehicle logs.
+    ramp_filter_tau_sec: 0.25
+    ramp_roughness_tau_sec: 0.3
+    ramp_roughness_limit_deg: 1.0
+    ramp_outlier_limit_deg: 45.0
+    ramp_pitch_deg: 4.5
+    # After GPS section 2 entry, travel 0.5 m, then confirm incline for 1 s.
+    ramp_entry_distance_m: 0.5
+    ramp_pitch_confirm_sec: 1.0
     ramp_delay_sec: 0.5
     ramp_slow_pitch_deg: 5.0
-    # At 15 deg: align for 0.5 s, follow the camera path at stage 2 for 3 s,
+    # After ramp confirmation: align for 0.5 s, follow the camera path at stage 2 for 3 s,
     # then latch stage 1 until the ramp becomes level to resist rollback.
     ramp_slow_hold_sec: 3.0
     ramp_level_pitch_deg: 3.0
-    # Stop as soon as the calibrated stop-line distance reaches 2 m.
+    # Legacy camera-line parameters, unused by waypoint stop/signal decisions.
     stop_line_trigger_distance_m: 2.0
-    # Start this hold only after encoder feedback confirms an actual stop.
+    intersection_stop_wait_sec: 1.0
+    # Legacy hold setting; waypoint ramp uses ramp_second_line_stop_sec below.
     minimum_stop_sec: 2.0
     actual_stop_speed_mps: 0.05
     # A line must remain absent this long before another detection is counted.
     stop_line_rearm_sec: 0.5
     # After the first ramp stop line, accept another detection as the second
     # line only after MCU odometry reports at least this much travel.
+    # Legacy compatibility; unused for ramp DR arrival.
     ramp_stop_line_min_separation_m: 1.5
-    # At the second ramp line within 2 m, stop for exactly three seconds,
-    # then continue camera path following at stage 2 without another hold.
+    # Waypoint mode: hold three seconds AFTER measured stop at the 1 m offset target.
     ramp_second_line_stop_sec: 3.0
     ramp_post_stop_drive_sec: 0.0
     # Require this absence before the next traffic20 is a new sign event.
@@ -29,7 +44,7 @@ course_mission_node:
     # measured from the cumulative MCU odometry path length.
     traffic20_rearm_distance_m: 2.0
     odom_topic: "/mcu/odom"
-    # The perception node already confirms each labeled signal for 3 seconds.
+    # Waypoint signals use a seven-frame majority in the perception node.
     green_confirm_sec: 0.0
     command_rate_hz: 20.0
     sensor_timeout_sec: 0.5

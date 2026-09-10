@@ -9,6 +9,7 @@ from launch.event_handlers import OnProcessExit
 from launch.actions import RegisterEventHandler
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _positive_integer(name, value):
@@ -45,7 +46,7 @@ def _launch_setup(context):
         parameters=[
             str(config_file),
             {
-                "serial_no": serial_no,
+                "serial_no": ParameterValue(serial_no, value_type=str),
                 "rgb_camera.color_profile": profile,
             },
         ],

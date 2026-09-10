@@ -13,6 +13,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32, Int8, String
 
 from .traffic_light_color import (
+    SevenFrameVote,
     best_labeled_light,
     finish_signal_from_bgr,
     update_light_confirmation,
@@ -37,7 +38,8 @@ class TrafficLightColorNode(Node):
                 "/perception/stop_line_distance_valid"),
             "activation_distance_m": 3.0,
             "distance_timeout_sec": 0.35,
-            "confirmation_frames": 3,
+            "confirmation_frames": 7,
+            "waypoint_signal_control": False,
             "final_image_topic":"/camera/image_raw",
             "final_state_topic":"/perception/final_signal_state",
             "final_process_hz":10.0,
@@ -52,6 +54,10 @@ class TrafficLightColorNode(Node):
         self.stop_line_distance_valid = False
         self.stop_line_distance_time = None
         self.signal_tracker = None
+        self.vote = SevenFrameVote()
+        self.window_time = -float("inf")
+        self.window_start_ros = 0.0
+        self.create_subscription(String, "/mission/signal_window", self.on_signal_window, 10)
         self.active_section=1;self.final_last_process=0.0
         self.final_candidate="UNKNOWN";self.final_candidate_start=None
         self.final_candidate_frames=0
@@ -80,6 +86,29 @@ class TrafficLightColorNode(Node):
 
     def param(self, name):
         return self.get_parameter(name).value
+
+    def on_signal_window(self, msg):
+        if msg.data != self.vote.window_id:
+            self.window_start_ros = self.get_clock().now().nanoseconds*1e-9
+        self.vote.arm(str(msg.data))
+        self.window_time = time.monotonic()
+
+    def waypoint_vote(self, state, stamp, box=None):
+        now = time.monotonic()
+        ros_now = self.get_clock().now().nanoseconds*1e-9
+        if now-self.window_time > 0.3:
+            self.vote.arm("")
+        if not self.window_start_ros <= stamp <= ros_now+0.1 or ros_now-stamp > 0.5:
+            return
+        result = self.vote.update(state, stamp, now, box)
+        if result is None:
+            return
+        self.result_pub.publish(String(data=json.dumps(result)))
+        self.state_pub.publish(String(data=result["state"]))
+        if self.active_section == 11:
+            self.final_state_pub.publish(String(data=result["state"]))
+        permitted = result["state"] == ("LEFT" if self.active_section == 8 else "GREEN")
+        self.go_pub.publish(Bool(data=permitted))
 
     def on_stop_line_distance(self, msg):
         value = float(msg.data)
@@ -112,6 +141,19 @@ class TrafficLightColorNode(Node):
                 raise ValueError("detections must be a list")
         except (ValueError, TypeError, json.JSONDecodeError):
             detections = []
+
+        if self.param("waypoint_signal_control"):
+            if self.active_section not in (4, 6, 8):
+                return
+            # Count every color, including RED/YELLOW on the left-turn section.
+            try:
+                stamp = payload["stamp"]["sec"] + payload["stamp"]["nanosec"]*1e-9
+                best, _ = best_labeled_light(detections, self.param("candidate_class_names"),
+                                              self.param("minimum_yolo_confidence"))
+                self.waypoint_vote(best["state"], stamp, best["box"])
+            except (KeyError, TypeError, ValueError, UnboundLocalError):
+                pass
+            return
 
         # Section 8 is a protected-left intersection. Only the Left class is
         # eligible there; ordinary red/yellow/green detections are ignored.
@@ -163,6 +205,10 @@ class TrafficLightColorNode(Node):
             frame,tuple(self.param("final_roi")),
             self.param("final_minimum_blob_area"),
             self.param("final_dominance_ratio"))
+        if self.param("waypoint_signal_control"):
+            stamp = msg.header.stamp.sec + msg.header.stamp.nanosec*1e-9
+            self.waypoint_vote(state, stamp)
+            return
         if state=="UNKNOWN":
             self.final_candidate="UNKNOWN";self.final_candidate_start=None
             self.final_candidate_frames=0

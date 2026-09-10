@@ -41,12 +41,12 @@ class CameraPathPlanner(Node):
         self.last_lane_path=None; self.last_lane_path_time=None
         self.low_confidence_since=None
         self.turn_sm=TurnStateMachine(); self.turn_template=None
-        defaults={"input_mode":"external","mock_scenario":"STRAIGHT_BOTH","base_frame_id":"base_link","camera_optical_frame_id":"","camera_x_m":.41,"camera_y_m":0.,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.,"vehicle_width_m":.77,"vehicle_length_m":1.30,"front_overhang_m":.26,"rear_overhang_m":.26,"mask_sync_tolerance_sec":.05,"mask_stale_timeout_sec":.2,"temporal_hold_timeout_sec":.3,"lane_mode_hold_timeout_sec":2.,"turn_progress_timeout_sec":3.,"min_turn_radius_m":1.2,"bev_forward_min_m":.3,"bev_forward_max_m":8.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.0,"bev_resolution_m_per_pixel":.02,"lane_width_m":.8,"single_boundary_safety_margin_m":.15,"yellow_path_corridor_m":.25,"obstacle_safety_margin_m":.15,"obstacle_maximum_lateral_step_m":.10,"road_mask_close_kernel_pixels":11,"path_spatial_filter_window":7,"path_new_frame_weight":.2,"path_maximum_frame_shift_m":.04,"confidence_high_threshold":.7,"confidence_low_threshold":.4,"low_confidence_hold_sec":.5,"medium_confidence_new_frame_weight":.08,"medium_confidence_maximum_shift_m":.02,"confidence_desired_path_span_m":3.,"validator_maximum_path_shift_m":.25,"validator_maximum_curvature_per_m":1.,"validator_minimum_path_span_m":1.,"validator_rejected_confidence_cap":.35,"debug_image_fps":10.0}
+        defaults={"input_mode":"external","mock_scenario":"STRAIGHT_BOTH","base_frame_id":"base_link","camera_info_topic":"/camera/camera_info","camera_optical_frame_id":"","camera_x_m":.41,"camera_y_m":0.,"camera_z_m":.85,"camera_mount_roll_deg":0.,"camera_mount_pitch_deg":-5.,"camera_mount_yaw_deg":0.,"vehicle_width_m":.77,"vehicle_length_m":1.30,"front_overhang_m":.26,"rear_overhang_m":.26,"mask_sync_tolerance_sec":.05,"mask_stale_timeout_sec":.2,"temporal_hold_timeout_sec":.3,"lane_mode_hold_timeout_sec":2.,"turn_progress_timeout_sec":3.,"min_turn_radius_m":1.2,"bev_forward_min_m":.3,"bev_forward_max_m":8.,"bev_normal_lateral_m":1.2,"bev_turn_lateral_m":1.5,"bev_s_curve_lateral_m":1.5,"bev_intersection_lateral_m":1.0,"bev_resolution_m_per_pixel":.02,"lane_width_m":.8,"single_boundary_safety_margin_m":.15,"yellow_path_corridor_m":.25,"obstacle_safety_margin_m":.15,"obstacle_maximum_lateral_step_m":.10,"road_mask_close_kernel_pixels":11,"path_spatial_filter_window":7,"path_new_frame_weight":.2,"path_maximum_frame_shift_m":.04,"confidence_high_threshold":.7,"confidence_low_threshold":.4,"low_confidence_hold_sec":.5,"medium_confidence_new_frame_weight":.08,"medium_confidence_maximum_shift_m":.02,"confidence_desired_path_span_m":3.,"validator_maximum_path_shift_m":.25,"validator_maximum_curvature_per_m":1.,"validator_minimum_path_span_m":1.,"validator_rejected_confidence_cap":.35,"debug_image_fps":10.0}
         for key,value in defaults.items(): self.declare_parameter(key,value)
         self.turn_sm.progress_timeout_s=self.p("turn_progress_timeout_sec")
         self.input_mode=self.p("input_mode")
         external_topics=external_mask_topics(self.input_mode)
-        self.create_subscription(CameraInfo,"/camera/camera_info",self.on_info,10)
+        self.create_subscription(CameraInfo,self.p("camera_info_topic"),self.on_info,10)
         if self.input_mode == "external":
             for key,topic in external_topics:
                 self.create_subscription(Image,topic,lambda msg,k=key:self.on_mask(k,msg),qos_profile_sensor_data)
@@ -108,7 +108,18 @@ class CameraPathPlanner(Node):
         stamp=self.now(); meta=MaskMeta(stamp,self.frame,self.info.width,self.info.height,"mono8")
         self.mask_meta={key:meta for key in self.masks}; return True
 
-    def _header(self): return Header(stamp=self.get_clock().now().to_msg(),frame_id=self.p("base_frame_id"))
+    def _header(self):
+        # Keep the source RGB capture time through YOLO masks and BEV.
+        header=Header(frame_id=self.p("base_frame_id"))
+        if self.last_accepted_stamp is None:
+            header.stamp=self.get_clock().now().to_msg()
+        else:
+            seconds=int(self.last_accepted_stamp)
+            nanoseconds=int(round((self.last_accepted_stamp-seconds)*1e9))
+            if nanoseconds>=1_000_000_000:
+                seconds+=1;nanoseconds-=1_000_000_000
+            header.stamp.sec=seconds;header.stamp.nanosec=nanoseconds
+        return header
     def publish_invalid(self, reason="invalid"):
         self.path_pub.publish(Path(header=self._header())); self.valid_pub.publish(Bool(data=False)); self.conf_pub.publish(Float32(data=0.)); self.mode_pub.publish(Int8(data=INVALID)); self.observed_mode_pub.publish(Int8(data=INVALID)); self.status_pub.publish(String(data=reason)); self.yellow_ahead_valid_pub.publish(Bool(data=False))
 
@@ -222,6 +233,14 @@ class CameraPathPlanner(Node):
             elif state == TurnState.LANE_REACQUIRE and self.turn_template is not None and len(path)>=2:
                 path,mode=blend_reacquire(self.turn_template,path,.5),LANE_REACQUIRE
             elif state == TurnState.ABORT:return self.publish_invalid("turn_state_aborted")
+
+            # 1차 검증은 시간 필터에 잘못된 후보가 들어가기 전에 기하학적으로
+            # 성립하지 않는 경로를 차단한다. 신뢰도는 바로 다음 단계에서 별도로
+            # 계산하므로 여기서는 경로의 형상과 범위만 검사한다.
+            first_valid=validate_path(
+                path,1.0,max_forward_m=self.p("bev_forward_max_m"))
+            if not first_valid:
+                return self.publish_invalid("first_path_validator_failed")
             confidence,confidence_metrics=path_confidence(
                 road,left,right,path,self.previous,
                 self.p("confidence_desired_path_span_m"))
@@ -268,6 +287,7 @@ class CameraPathPlanner(Node):
                         f"validator={'+'.join(validator_reasons) or 'LOW_SCORE'}:"
                         "hold_expired")
 
+            # 2차 검증은 신뢰도 판단과 시간 필터를 통과한 최종 경로를 검사한다.
             valid=validate_path(path,confidence,
                                 max_forward_m=self.p("bev_forward_max_m"))
             if valid and mode != TEMPORAL_HOLD and confidence>=low:
@@ -289,7 +309,9 @@ class CameraPathPlanner(Node):
             for x,y in path:
                 pose=PoseStamped(header=message.header); pose.pose.position.x=float(x); pose.pose.position.y=float(y); pose.pose.orientation.w=1.; message.poses.append(pose)
             self.path_pub.publish(message); self.valid_pub.publish(Bool(data=valid)); self.conf_pub.publish(Float32(data=confidence)); self.mode_pub.publish(Int8(data=mode)); self.observed_mode_pub.publish(Int8(data=observed_mode))
-            status=(f"{'ok' if valid else 'generated_path_invalid'};"
+            status=(f"{'ok' if valid else 'second_path_validator_failed'};"
+                    "first_validator=PASS;"
+                    f"second_validator={'PASS' if valid else 'FAIL'};"
                     f"confidence={confidence:.3f};road={confidence_metrics['road_area']:.2f};"
                     f"validator={'PASS' if not validator_reasons else '+'.join(validator_reasons)};"
                     f"lane={confidence_metrics['lane_length']:.2f};"

@@ -1,9 +1,11 @@
 import time
+import os
 import json
 from collections import deque
 import numpy as np
 import cv2
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -37,7 +39,9 @@ class CameraYoloInferenceNode(Node):
         output_qos=QoSProfile(history=QoSHistoryPolicy.KEEP_LAST,depth=1,reliability=QoSReliabilityPolicy.RELIABLE)
         self.mask_pubs={role:self.create_publisher(Image,f"/camera/{topic}",qos_profile_sensor_data) for role,topic in (("road","road_mask"),("white_line","white_line_mask"),("yellow_line","yellow_line_mask"))}
         # Debug video must never back-pressure inference when RQT is slow.
-        self.detections_image_pub=self.create_publisher(Image,"/perception/detections_image",qos_profile_sensor_data)
+        # Use the default reliable QoS for the diagnostic image so rqt_image_view
+        # and generic ROS image tools discover and receive it consistently.
+        self.detections_image_pub=self.create_publisher(Image,"/perception/detections_image",10)
         self.detections_pub=self.create_publisher(String,"/perception/detections_json",output_qos)
         self.stop_pub=self.create_publisher(Bool,self.p("stop_detected_topic"),output_qos)
         self.traffic20_pub=self.create_publisher(Bool,"/perception/traffic20_detected",output_qos)
@@ -53,9 +57,17 @@ class CameraYoloInferenceNode(Node):
         self.create_subscription(Int8,"/mission/active_section",lambda m:setattr(self,"active_section",int(m.data)),10)
         self.create_subscription(Int8,"/mission/turn_direction",lambda m:setattr(self,"turn_direction",int(m.data)),10)
         try:
-            manifest=load_manifest(self.p("class_manifest_path"));self.mapper=SemanticClassMapper(manifest)
+            manifest_path=str(self.p("class_manifest_path") or "").strip()
+            model_path=str(self.p("segmentation_model_path") or "").strip()
+            share=get_package_share_directory("camera_yolo_inference")
+            if not manifest_path:
+                manifest_path=os.path.join(share,"config","class_manifest.yaml")
+            if not model_path:
+                model_path=os.path.join(
+                    share,"models","hanla_competition_11class_best.pt")
+            manifest=load_manifest(manifest_path);self.mapper=SemanticClassMapper(manifest)
             input_shape=(int(self.p("input_height")),int(self.p("input_width")))
-            self.backend=backend or UltralyticsSegmentationBackend(self.p("segmentation_model_path"),self.p("device"),input_shape,self.p("confidence_threshold"),self.p("require_cuda"));self.backend.load_model();self.backend.warmup();self.model_names=self.backend.get_model_names();self.mapper.resolve_model_classes(self.model_names)
+            self.backend=backend or UltralyticsSegmentationBackend(model_path,self.p("device"),input_shape,self.p("confidence_threshold"),self.p("require_cuda"));self.backend.load_model();self.backend.warmup();self.model_names=self.backend.get_model_names();self.mapper.resolve_model_classes(self.model_names)
             self.role_class_ids={role:self.mapper.class_ids_for_role(role) for role in ("road","white_line","yellow_line")}
             self.inference_role_class_ids=dict(self.role_class_ids)
             self.inference_role_class_ids["words"]=self.mapper.class_ids_for_role("words")
@@ -235,6 +247,14 @@ class CameraYoloInferenceNode(Node):
             # perception_valid and the zero masks below still force a safe stop.
             self.output_frame_times.append(time.monotonic())
             self.latest_visualization=(bgr,instances,masks,image.header)
+            # Emit the diagnostic frame immediately after successful
+            # inference; the periodic timer can repeat it for slow viewers.
+            self.cached_visualization_msg = bgr8_to_image(
+                self.render_detections(bgr, instances, masks), image.header)
+            self.detections_image_pub.publish(self.cached_visualization_msg)
+            self.last_visualized_stamp = (image.header.stamp.sec,
+                                          image.header.stamp.nanosec)
+            self.last_detections_image_time = time.monotonic()
             for role in ("road","white_line","yellow_line"):
                 if not validate_output_mask(masks[role],(image.height,image.width),allow_empty=True):raise ValueError(f"invalid_{role}_mask")
             if not has_navigation_mask(masks):raise ValueError("empty_navigation_masks: road/white_line/yellow_line all absent")

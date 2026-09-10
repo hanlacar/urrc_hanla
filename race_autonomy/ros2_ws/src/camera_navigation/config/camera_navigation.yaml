@@ -6,9 +6,9 @@ camera_path_planner_node:
     camera_optical_frame_id: "" # Empty: lock to first CameraInfo.header.frame_id.
     # Measured vertical distance from the ground to the camera lens center.
     # Measured from rear axle centre to camera lens centre.
-    camera_x_m: 0.41
+    camera_x_m: 0.38
     camera_y_m: 0.0
-    camera_z_m: 0.96
+    camera_z_m: 0.97
     camera_mount_roll_deg: 0.0
     # Negative pitch looks downward in this package's REP-103 convention.
     # Keep this equal to the physically measured camera mounting angle.

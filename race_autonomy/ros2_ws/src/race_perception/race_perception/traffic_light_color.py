@@ -115,3 +115,43 @@ def update_light_confirmation(candidate, candidate_box, eligible, tracker,
     required = max(1, int(confirmation_frames))
     state = candidate if current["consecutive_frames"] >= required else UNKNOWN
     return state, current
+
+
+class SevenFrameVote:
+    """A majority is >=4 of seven distinct frames, including UNKNOWN abstentions."""
+    def __init__(self):
+        from collections import deque
+        self.frames = deque(maxlen=7)
+        self.window_id = ''
+        self.last_stamp = None
+        self.last_time = None
+        self.box = None
+
+    def arm(self, window_id):
+        if window_id != self.window_id:
+            self.frames.clear()
+            self.box = None
+            self.window_id = window_id
+            # Preserve the last frame timestamp across windows: replaying a
+            # previously seen frame is never a new vote.
+            self.last_time = None
+
+    def update(self, state, stamp, now, box=None):
+        import math
+        from collections import Counter
+        if not self.window_id or not math.isfinite(stamp) or (self.last_stamp is not None and stamp <= self.last_stamp):
+            return None
+        if self.last_time is not None and now-self.last_time > 0.3:
+            self.frames.clear()
+            self.box = None
+        if box is not None and self.box is not None and box_iou(box, self.box) < 0.3:
+            self.frames.clear()
+        if box is not None:
+            self.box = box
+        self.last_stamp, self.last_time = stamp, now
+        self.frames.append(state if state in CONFIRMABLE_STATES else UNKNOWN)
+        counts = dict(Counter(self.frames))
+        confirmed = next((s for s, n in counts.items() if s in CONFIRMABLE_STATES and
+                          n >= 4), UNKNOWN) if len(self.frames) == 7 else UNKNOWN
+        return dict(state=confirmed, window_id=self.window_id,
+                    frames=len(self.frames), votes=counts)
