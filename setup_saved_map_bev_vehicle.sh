@@ -2,7 +2,11 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-workspace="$repo_root/race_autonomy/ros2_ws"
+if [[ -d "$repo_root/race_autonomy/ros2_ws" ]]; then
+    workspace="$repo_root/race_autonomy/ros2_ws"
+else
+    workspace="$repo_root/race_autonomy/ros_ws"
+fi
 map_dir="$repo_root/maps/test_20260909_191813_8xh0Le"
 
 if [[ "$(uname -s)" != Linux ]]; then

@@ -2,7 +2,13 @@
 set -eo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-workspace="${RACE_WORKSPACE:-$repo_root/race_autonomy/ros2_ws}"
+if [[ -n "${RACE_WORKSPACE:-}" ]]; then
+    workspace="$RACE_WORKSPACE"
+elif [[ -d "$repo_root/race_autonomy/ros2_ws" ]]; then
+    workspace="$repo_root/race_autonomy/ros2_ws"
+else
+    workspace="$repo_root/race_autonomy/ros_ws"
+fi
 map_dir="${RACE_MAP_DIR:-$repo_root/maps/test_20260909_191813_8xh0Le}"
 # This tracked model is byte-for-byte identical to the latest
 # hanla_yolo11n_seg_best.pt used during vehicle validation.
@@ -21,8 +27,13 @@ unset AMENT_PREFIX_PATH CMAKE_PREFIX_PATH COLCON_PREFIX_PATH PYTHONPATH LD_LIBRA
 source /opt/ros/jazzy/setup.bash
 
 if [[ ! -f "$workspace/install/setup.bash" ]]; then
-    echo "ROS workspace is not built: $workspace/install/setup.bash" >&2
-    exit 1
+    if [[ -x "$repo_root/setup_saved_map_bev_vehicle.sh" ]]; then
+        echo "ROS workspace is not built; running first-time setup..."
+        "$repo_root/setup_saved_map_bev_vehicle.sh"
+    else
+        echo "ROS workspace is not built: $workspace/install/setup.bash" >&2
+        exit 1
+    fi
 fi
 
 if [[ ! -f "$map_dir/map.db" && -f "$map_dir/map.db.xz" ]]; then
