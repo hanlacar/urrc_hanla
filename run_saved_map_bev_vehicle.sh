@@ -10,9 +10,13 @@ else
     workspace="$repo_root/race_autonomy/ros_ws"
 fi
 map_dir="${RACE_MAP_DIR:-$repo_root/maps/test_20260909_191813_8xh0Le}"
-# This tracked model is byte-for-byte identical to the latest
-# hanla_yolo11n_seg_best.pt used during vehicle validation.
-model="$workspace/src/camera_yolo_inference/models/hanla_competition_11class_best.pt"
+# CPU uses the portable .pt model; CUDA uses the tracked TensorRT engine.
+if [[ "${RACE_DEVICE:-cpu}" == cuda* || "${RACE_REQUIRE_CUDA:-false}" == true ]]; then
+    default_model="$workspace/src/camera_yolo_inference/models/hanla_competition_11class_best.engine"
+else
+    default_model="$workspace/src/camera_yolo_inference/models/hanla_competition_11class_best.pt"
+fi
+model="${RACE_MODEL_PATH:-$default_model}"
 manifest="$workspace/src/camera_yolo_inference/config/class_manifest.yaml"
 python_executable="$workspace/.yolo_runtime/bin/python"
 camera_serial="${RACE_CAMERA_SERIAL:-338122302896}"

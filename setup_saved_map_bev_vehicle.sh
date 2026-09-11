@@ -59,7 +59,7 @@ python3 -m venv --system-site-packages "$workspace/.yolo_runtime"
 "$workspace/.yolo_runtime/bin/python" -m pip install --upgrade pip
 if [[ "${RACE_INSTALL_CUDA:-false}" == true ]]; then
     echo "Installing the GPU PyTorch runtime (this can download several GB)..."
-    "$workspace/.yolo_runtime/bin/python" -m pip install torch torchvision
+    "$workspace/.yolo_runtime/bin/python" -m pip install torch torchvision tensorrt
 else
     echo "Installing the CPU-only PyTorch runtime..."
     "$workspace/.yolo_runtime/bin/python" -m pip install \
