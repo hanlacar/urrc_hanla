@@ -57,6 +57,15 @@ rosdep install --from-paths "$workspace/src" --ignore-src -r -y --rosdistro jazz
 
 python3 -m venv --system-site-packages "$workspace/.yolo_runtime"
 "$workspace/.yolo_runtime/bin/python" -m pip install --upgrade pip
+if [[ "${RACE_INSTALL_CUDA:-false}" == true ]]; then
+    echo "Installing the GPU PyTorch runtime (this can download several GB)..."
+    "$workspace/.yolo_runtime/bin/python" -m pip install torch torchvision
+else
+    echo "Installing the CPU-only PyTorch runtime..."
+    "$workspace/.yolo_runtime/bin/python" -m pip install \
+        --ignore-installed --index-url https://download.pytorch.org/whl/cpu \
+        torch torchvision
+fi
 "$workspace/.yolo_runtime/bin/python" -m pip install -r "$repo_root/requirements-vehicle.txt"
 
 if [[ ! -f "$map_dir/map.db" ]]; then

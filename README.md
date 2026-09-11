@@ -22,6 +22,11 @@ RACE_CAMERA_SERIAL=카메라시리얼 RACE_MCU_PORT=/dev/ttyACM1 \
 ./run_saved_map_bev_vehicle.sh
 ```
 
+기본 설치와 실행은 CPU 모드라 CUDA와 TensorRT를 받지 않는다. GPU 추론이
+필요할 때만 설정 단계에서 `RACE_INSTALL_CUDA=true ./setup_saved_map_bev_vehicle.sh`
+를 사용하고, 그 뒤 실행 단계에서 `RACE_DEVICE=cuda:0 RACE_REQUIRE_CUDA=true`를
+지정한다.
+
 이 저장소는 카메라 경로 생성·Pure Pursuit 제어·구간 미션 판단과
 T870 MCU 명령 중재기를 포함한다. ROS 2 Jazzy를 사용하며 모든 팀 노드는
 동일한 `ROS_DOMAIN_ID=10`에서 실행해야 한다.
