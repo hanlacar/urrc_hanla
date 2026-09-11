@@ -45,7 +45,10 @@ if ! id -nG "$USER" | tr ' ' '\n' | grep -qx dialout; then
     echo "Added $USER to dialout. Log out and back in before using the MCU serial port."
 fi
 
+# ROS Jazzy's setup script references optional variables that may be unset.
+set +u
 source /opt/ros/jazzy/setup.bash
+set -u
 if [[ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]]; then
     sudo rosdep init
 fi
