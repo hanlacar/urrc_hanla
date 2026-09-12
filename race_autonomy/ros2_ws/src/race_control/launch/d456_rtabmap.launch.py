@@ -29,7 +29,7 @@ def setup(context):
             # RTAB-Map only needs aligned RGB-D. Explicitly disable the two
             # infrared streams to avoid saturating the D455 USB connection.
             "enable_infra1": False, "enable_infra2": False,
-            "rgb_camera.color_profile": "640x480x30",
+            "rgb_camera.color_profile": "640x480x60",
             # Keep RGB at 30 Hz, but use the lower supported depth rate to
             # reduce USB bandwidth and avoid intermittent depth-start errors.
             "depth_module.depth_profile": "640x480x15",
@@ -65,9 +65,14 @@ def setup(context):
             "subscribe_rgbd":"true",
             "topic_queue_size":"30", "sync_queue_size":"30",
             "qos":"2", "visual_odometry":"true",
+            "odom_topic":LaunchConfiguration("odom_topic"),
+            # TF frame IDs cannot start with '/'; keep the topic absolute but
+            # use the canonical frame name for odom -> base_link.
+            "vo_frame_id":"odom",
             "database_path":database, "args":args,
             "rviz":LaunchConfiguration("rviz"), "rtabmap_viz":"false"}.items())
-    monitor=Node(package="race_control", executable="sensor_sync_monitor", output="screen")
+    monitor=Node(package="race_control", executable="sensor_sync_monitor", output="screen",
+                 parameters=[{"odom_topic": LaunchConfiguration("odom_topic")}])
     return [camera,base_tf,optical_tf,slam,monitor]
 
 
@@ -78,6 +83,8 @@ def generate_launch_description():
         # D455 currently installed on the test vehicle.
         DeclareLaunchArgument("serial_no",default_value="338122302896"),
         DeclareLaunchArgument("rviz",default_value="true"),
+        # Keep RTAB-Map, route following, and diagnostics on one explicit topic.
+        DeclareLaunchArgument("odom_topic",default_value="/odom"),
         DeclareLaunchArgument("camera_x",default_value="0.38"),
         DeclareLaunchArgument("camera_y",default_value="0.0"),
         DeclareLaunchArgument("camera_z",default_value="0.97"),

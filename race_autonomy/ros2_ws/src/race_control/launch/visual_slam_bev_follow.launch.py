@@ -31,7 +31,7 @@ def generate_launch_description():
             "input_camera_info_topic": "/camera/camera/color/camera_info",
             "input_width": "640", "input_height": "480",
             "expected_image_width": "640", "expected_image_height": "480",
-            "inference_fps": "25.0",
+            "inference_fps": "60.0", "detections_image_fps": "60.0",
             "segmentation_model_path": LaunchConfiguration("segmentation_model_path"),
             "class_manifest_path": LaunchConfiguration("class_manifest_path"),
             "device": LaunchConfiguration("device"),
@@ -55,6 +55,7 @@ def generate_launch_description():
         package="race_control", executable="visual_slam_route", output="screen",
         parameters=[os.path.join(control, "config", "visual_slam_route.yaml"), {
             "mode": "follow", "route_file": LaunchConfiguration("route_file"),
+            "odom_topic": LaunchConfiguration("odom_topic"),
             "align_route_to_start": ParameterValue(
                 LaunchConfiguration("align_route_to_start"), value_type=bool),
             "require_bev": ParameterValue(LaunchConfiguration("require_bev"), value_type=bool)}])
@@ -75,6 +76,7 @@ def generate_launch_description():
                 "path_confidence_topic": "/camera/path_confidence"}])
     return LaunchDescription([
         DeclareLaunchArgument("route_file", default_value=""),
+        DeclareLaunchArgument("odom_topic", default_value="/odom"),
         DeclareLaunchArgument("commanded_speed_mps", default_value="0.0"),
         DeclareLaunchArgument("require_bev", default_value="true"),
         DeclareLaunchArgument("align_route_to_start", default_value="false"),

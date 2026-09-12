@@ -29,6 +29,7 @@ setup(
             "lane_center = race_perception.lane_center_node:main",
             "traffic_light_color = race_perception.traffic_light_color_node:main",
             "lidar_camera_guard = race_perception.lidar_camera_guard_node:main",
+            "ackermann_lidar_planner = race_perception.ackermann_lidar_planner_node:main",
         ],
     },
 )

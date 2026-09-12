@@ -22,7 +22,7 @@ class SensorSyncMonitor(Node):
             "rgb_topic": "/camera/camera/color/image_raw",
             "depth_topic": "/camera/camera/aligned_depth_to_color/image_raw",
             "camera_info_topic": "/camera/camera/color/camera_info",
-            "odom_topic": "/rtabmap/odom", "bev_topic": "/camera/bev/path",
+            "odom_topic": "/odom", "bev_topic": "/camera/bev/path",
             "rgb_depth_max_skew_sec": 0.015,
             "rgb_info_max_skew_sec": 0.015,
             "rgb_odom_max_skew_sec": 0.10,

@@ -47,7 +47,7 @@ class VisualSlamRouteNode(Node):
             "bev_timeout_sec": 0.30, "bev_minimum_confidence": 0.45,
             "require_bev": False,
             "align_route_to_start": False,
-            "odom_topic": "/rtabmap/odom",
+            "odom_topic": "/odom",
             "slam_bev_max_skew_sec": 0.10,
             "bev_correction_gain": 0.55,
             "bev_maximum_correction_m": 0.35,
@@ -170,6 +170,8 @@ class VisualSlamRouteNode(Node):
         self.status_pub.publish(String(data=json.dumps({
             "mode": self.mode, "valid": False, "reason": reason,
             "route_points": len(self.points), "progress_index": self.progress,
+            "odom_topic": self.p("odom_topic"),
+            "odom_samples": len(self.odom_stamps),
         }, separators=(",", ":"))))
 
     def tick(self):
@@ -249,6 +251,7 @@ class VisualSlamRouteNode(Node):
         self.correction_pub.publish(Float32(data=float(correction)))
         self.sync_status_pub.publish(String(data=json.dumps({
             "valid": bool(time_aligned), "bev_fresh": bool(bev_fresh),
+            "odom_topic": self.p("odom_topic"),
             "bev_stamp": self.bev_stamp, "odom_samples": len(self.odom_stamps),
             "slam_bev_skew_ms": (stamp_skew*1000.0 if math.isfinite(stamp_skew)
                                  else None),

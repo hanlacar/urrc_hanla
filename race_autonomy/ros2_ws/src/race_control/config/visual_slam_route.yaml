@@ -21,7 +21,7 @@ visual_slam_route:
     bev_confidence_topic: "/camera/bev/path_confidence"
     bev_timeout_sec: 0.30
     bev_minimum_confidence: 0.45
-    odom_topic: "/rtabmap/odom"
+    odom_topic: "/odom"
     # Reject BEV correction if its source RGB frame has no nearby SLAM odom.
     slam_bev_max_skew_sec: 0.10
     bev_correction_gain: 0.55

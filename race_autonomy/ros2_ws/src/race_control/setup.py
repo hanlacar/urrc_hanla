@@ -25,6 +25,7 @@ setup(
         "course_mission = race_control.course_mission_node:main",
         "fused_waypoint = race_control.fused_waypoint_node:main",
         "section_transition = race_control.section_transition_node:main",
+        "force_section = race_control.force_section_node:main",
         "curvature_speed_planner = race_control.curvature_speed_planner_node:main",
         "visual_slam_route = race_control.visual_slam_route_node:main",
         "sensor_sync_monitor = race_control.sensor_sync_monitor_node:main",

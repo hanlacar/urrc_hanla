@@ -10,9 +10,7 @@ import sys
 import termios
 import time
 import tty
-
 import serial
-
 
 HELP = """
 키 조작

@@ -54,4 +54,4 @@
     # Signed reflections must remain an explicit configuration decision.
     allow_axis_reflection: true
     # Immediate current Pitch state only; no confirmation, hysteresis, or latch.
-    slope_trigger_deg: 25.0
+    slope_trigger_deg: 5.0

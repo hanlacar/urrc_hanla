@@ -97,7 +97,7 @@ class ImuManagerNode(Node):
             "startup_accel_norm_min_mps2": 8.5,
             "startup_accel_norm_max_mps2": 11.0,
             "assume_vehicle_level_at_start": True,
-            "slope_trigger_deg": 25.0,
+            "slope_trigger_deg": 5.0,
         }
         for name, value in defaults.items():
             if name == "sensor_axis_matrix":

@@ -34,7 +34,7 @@ class FilterConfig:
 
 @dataclass
 class SlopeStateConfig:
-    slope_trigger_deg: float = 25.0
+    slope_trigger_deg: float = 5.0
 
 
 class SlopeStateDetector:

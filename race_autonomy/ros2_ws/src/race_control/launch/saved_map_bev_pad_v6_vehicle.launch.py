@@ -22,6 +22,7 @@ def generate_launch_description():
         DeclareLaunchArgument("route_file"),
         DeclareLaunchArgument("serial_no", default_value="338122302896"),
         DeclareLaunchArgument("mcu_port", default_value="/dev/ttyACM0"),
+        DeclareLaunchArgument("odom_topic", default_value="/odom"),
         DeclareLaunchArgument("target_speed_mps", default_value="0.15"),
         DeclareLaunchArgument("rviz", default_value="true"),
         DeclareLaunchArgument("launch_rqt", default_value="true"),
@@ -37,11 +38,13 @@ def generate_launch_description():
             launch_arguments={
                 "mode": "localization", "database": LaunchConfiguration("database"),
                 "serial_no": LaunchConfiguration("serial_no"),
-                "rviz": LaunchConfiguration("rviz")}.items()),
+                "rviz": LaunchConfiguration("rviz"),
+                "odom_topic": LaunchConfiguration("odom_topic")}.items()),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(str(control / "visual_slam_bev_follow.launch.py")),
             launch_arguments={
                 "route_file": LaunchConfiguration("route_file"),
+                "odom_topic": LaunchConfiguration("odom_topic"),
                 "commanded_speed_mps": LaunchConfiguration("target_speed_mps"),
                 "require_bev": "true",
                 "align_route_to_start": "true",

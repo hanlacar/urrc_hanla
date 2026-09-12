@@ -22,6 +22,7 @@ python_executable="$workspace/.yolo_runtime/bin/python"
 camera_serial="${RACE_CAMERA_SERIAL:-338122302896}"
 mcu_port="${RACE_MCU_PORT:-/dev/ttyACM0}"
 target_speed="${RACE_TARGET_SPEED_MPS:-0.15}"
+odom_topic="${RACE_ODOM_TOPIC:-/odom}"
 device="${RACE_DEVICE:-cpu}"
 require_cuda="${RACE_REQUIRE_CUDA:-false}"
 launch_rqt="${RACE_LAUNCH_RQT:-true}"
@@ -86,4 +87,5 @@ exec ros2 launch race_control saved_map_bev_pad_v6_vehicle.launch.py \
     serial_no:="$camera_serial" \
     mcu_port:="$mcu_port" \
     target_speed_mps:="$target_speed" \
+    odom_topic:="$odom_topic" \
     launch_rqt:="$launch_rqt"
