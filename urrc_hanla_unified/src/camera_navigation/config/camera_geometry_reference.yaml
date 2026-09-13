@@ -1,0 +1,10 @@
+camera_geometry_reference:
+  frame_id: "" # Fill after reading the real CameraInfo.header.frame_id.
+  image_width: 640
+  image_height: 480
+  points:
+    - {name: center_0_5m, pixel_u: null, pixel_v: null, expected_x_m: 0.5, expected_y_m: 0.0}
+    - {name: center_1_0m, pixel_u: null, pixel_v: null, expected_x_m: 1.0, expected_y_m: 0.0}
+    - {name: center_2_0m, pixel_u: null, pixel_v: null, expected_x_m: 2.0, expected_y_m: 0.0}
+    - {name: left_1_0m, pixel_u: null, pixel_v: null, expected_x_m: 1.0, expected_y_m: 0.5}
+    - {name: right_1_0m, pixel_u: null, pixel_v: null, expected_x_m: 1.0, expected_y_m: -0.5}

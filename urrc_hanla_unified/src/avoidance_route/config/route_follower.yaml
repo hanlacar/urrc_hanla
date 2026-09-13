@@ -1,0 +1,47 @@
+route_follower:
+  ros__parameters:
+    odom_topic: /odom
+    reference_path_topic: /avoidance/route/reference_path
+    reference_path_frame: odom
+    requested_drive_topic: /avoidance/command/drive_requested
+    requested_wheel_topic: /avoidance/command/wheel_requested
+    lookahead_m: 1.20
+    wheelbase_m: 0.77
+    cruise_speed_mps: 1.00
+    max_steering_deg: 25.0
+    max_steering_change_deg_per_cycle: 2.0
+    acceleration_limit_mps2: 0.80
+    goal_tolerance_m: 0.10
+    start_position_tolerance_m: 0.30
+    start_yaw_tolerance_deg: 10.0
+    max_cross_track_error_m: 0.60
+    odom_timeout_s: 0.50
+    stationary_speed_tolerance_mps: 0.03
+    control_rate_hz: 20.0
+    actual_path_min_distance_m: 0.03
+    replan_stop_enabled: false
+    replan_required_topic: /avoidance/replan_required
+    selected_path_topic: /avoidance/selected_path
+    selected_path_timeout_s: 300.0
+    avoidance_speed_mps: 1.0
+    rejoin_approach_speed_mps: 0.5
+    avoidance_lookahead_m: 1.2
+    avoidance_max_cross_track_error_m: 0.20
+    avoidance_rejoin_remaining_m: 1.60
+    avoidance_rejoin_lateral_tolerance_m: 0.10
+    avoidance_rejoin_yaw_tolerance_deg: 2.0
+    avoidance_rejoin_steering_tolerance_deg: 2.0
+    avoidance_rejoin_alignment_distance_m: 2.0
+    auto_start_avoidance: true
+    path_ready_hold_sec: 0.30
+    csv_rejoin_lookahead_m: 2.0
+    csv_rejoin_recovery_distance_m: 6.0
+    # MCU contract: discrete drive level, not m/s.
+    route_drive_level: 2.0
+    avoidance_drive_level: 1.0
+    rear_lidar_required: false
+    scan_timeout_s: 0.30
+    mode_topic: /mcu/current_mode
+    allowed_avoidance_modes: ['5']
+    avoidance_active_topic: /avoidance/active
+    active_timeout_sec: 0.30

@@ -1,0 +1,87 @@
+camera_path_planner_node:
+  ros__parameters:
+    input_mode: external
+    mock_scenario: STRAIGHT_BOTH # Ignored completely in external mode.
+    base_frame_id: base_link
+    camera_optical_frame_id: "" # Empty: lock to first CameraInfo.header.frame_id.
+    # Measured vertical distance from the ground to the camera lens center.
+    # Measured from rear axle centre to camera lens centre.
+    camera_x_m: 0.38
+    camera_y_m: 0.0
+    camera_z_m: 0.97
+    camera_mount_roll_deg: 0.0
+    # Negative pitch looks downward in this package's REP-103 convention.
+    # Keep this equal to the physically measured camera mounting angle.
+    camera_mount_pitch_deg: -5.0
+    camera_mount_yaw_deg: 0.0
+    mask_sync_tolerance_sec: 0.05
+    mask_stale_timeout_sec: 0.45
+    temporal_hold_timeout_sec: 0.50
+    # Do not switch to road-only for brief boundary loss over painted words.
+    lane_mode_hold_timeout_sec: 2.00
+    turn_progress_timeout_sec: 3.0
+    min_turn_radius_m: 1.2
+    # Path projection keeps a small near-field floor. This setting does not
+    # crop or restrict YOLO object detection.
+    bev_forward_min_m: 0.1
+    bev_forward_max_m: 6.0
+    # Symmetric lateral BEV bounds selected from the active mission section.
+    bev_normal_lateral_m: 1.2
+    bev_turn_lateral_m: 1.5
+    # Sections 3 and 5 use the wider curve view.
+    bev_s_curve_lateral_m: 1.5
+    # Sections 4/6/8/11: use a narrow intersection view.
+    bev_intersection_lateral_m: 1.0
+    bev_resolution_m_per_pixel: 0.02
+    lane_width_m: 0.8
+    # Section 5: inflate road-mask holes by half vehicle width plus this margin.
+    obstacle_safety_margin_m: 0.25
+    # Limit frame-to-frame avoidance-path jumps toward a painted boundary.
+    obstacle_maximum_lateral_step_m: 0.10
+    # Fill small painted-word holes, then follow only the road component
+    # connected nearest the vehicle instead of averaging adjacent roads.
+    road_mask_close_kernel_pixels: 11
+    # Ordinary lane/road paths: reject row spikes and suppress frame jumps.
+    # Turn templates and section-5 clearance paths bypass this filter.
+    path_spatial_filter_window: 7
+    path_new_frame_weight: 0.20
+    path_maximum_frame_shift_m: 0.04
+    # Composite confidence policy. High accepts the normal filtered path;
+    # medium blends much more strongly with the previous path; low rejects the
+    # new candidate and holds the last trusted path briefly before stopping.
+    confidence_high_threshold: 0.70
+    confidence_low_threshold: 0.40
+    low_confidence_hold_sec: 0.50
+    medium_confidence_new_frame_weight: 0.08
+    medium_confidence_maximum_shift_m: 0.02
+    confidence_desired_path_span_m: 3.0
+    # Candidate validator runs after mode hysteresis and before history update.
+    validator_maximum_path_shift_m: 0.25
+    validator_maximum_curvature_per_m: 1.0
+    validator_minimum_path_span_m: 1.0
+    validator_rejected_confidence_cap: 0.35
+    # RQT BEV/ROI/path overlay; kept below control frequency to limit CPU use.
+    debug_image_fps: 10.0
+camera_path_controller_node:
+  ros__parameters:
+    # Measured body width. Path clearance uses this configured footprint width.
+    vehicle_width_m: 0.77
+    # Measured axle-centre distance: rear-to-camera 0.41 + camera-to-front 0.32.
+    vehicle_length_m: 1.30
+    front_overhang_m: 0.26
+    rear_overhang_m: 0.26
+    wheelbase_m: 0.73
+    min_lookahead_m: 1.0
+    max_lookahead_m: 1.5
+    lookahead_speed_gain: 1.0
+    max_steering_deg: 27.0
+    steering_rate_limit_deg_s: 20.0
+    # Match the T870 v29 discrete drive speeds. Stage 3/PWM 150 is 0.900 m/s
+    # and is selected explicitly by the section-9 traffic20 mission logic.
+    normal_speed_mps: 0.455
+    turn_speed_mps: 0.229
+    single_boundary_speed_mps: 0.455
+    road_only_speed_mps: 0.229
+    max_lateral_accel_mps2: 1.0
+    accel_limit_mps2: 0.5
+    decel_limit_mps2: 1.0

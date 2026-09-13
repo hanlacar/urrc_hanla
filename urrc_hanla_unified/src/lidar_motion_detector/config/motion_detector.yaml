@@ -1,0 +1,167 @@
+motion_detector_node:
+  ros__parameters:
+    lidar_role: "front"
+    output_namespace: "/lidar"
+    # t_parking_ws/cmd_vel_to_lidar_cmd is the sole shared MCU command owner.
+    # This detector keeps /lidar_drive_text and safety diagnostics only.
+    publish_lidar_drive_command: false
+    input_scan_topic: "/scan"
+    use_tf_transform: true
+    source_scan_frame: "laser"
+    target_frame: "base_link"
+    output_frame: "base_link"
+    tf_lookup_timeout_sec: 0.05
+    tf_warn_throttle_sec: 1.0
+    allow_no_tf_fallback: false
+    use_lidar_tf_as_roi_origin: true
+
+    static_points_topic: "/lidar/static_points"
+    dynamic_points_topic: "/lidar/dynamic_points"
+    all_motion_points_topic: "/lidar/all_motion_points"
+    roi_marker_topic: "/lidar/roi_marker"
+
+    min_range: 0.15
+    max_range: 12.0
+
+    use_roi_filter: true
+    display_all_points: true
+    classify_roi_only: true
+    publish_roi_filtered_points_only: false
+
+    # ROI is evaluated in base_link: +x forward, +y left.
+    front_angle_offset_deg: 0.0
+    roi_angle_half_width_deg: 30.0
+    roi_length_m: 1.5
+    roi_width_m: 1.5
+    roi_mode: "steering_warped_corridor"
+    use_speed_based_roi_length: true
+    ego_speed_topic: "/ego_speed_mps"
+    ego_speed_unit: "mps"
+    min_roi_length_m: 1.5
+    max_roi_length_m: 5.0
+    roi_time_horizon_sec: 1.5
+    use_ratio_zones: false
+    stop_zone_ratio: 0.33
+    slow_zone_ratio: 0.66
+    caution_zone_ratio: 1.0
+    roi_zone_step_m: 0.5
+    stop_zone_m: 0.5
+    slow_zone_m: 1.0
+    caution_zone_m: 1.5
+
+    use_steering_roi: true
+    steering_angle_topic: "/steering_angle"
+    steering_angle_unit: "deg"
+    steering_gain: 1.0
+    max_roi_center_shift_deg: 45.0
+    default_steering_angle_deg: 0.0
+    steering_sign: 1.0
+    wheelbase_m: 0.33
+    steering_deadband_deg: 3.0
+    max_steering_angle_deg: 40.0
+    use_warped_rectangle_roi: true
+    warped_roi_angle_gain: 1.0
+    max_warped_roi_angle_deg: 40.0
+    warped_roi_segments: 40
+    warped_roi_deadband_deg: 0.5
+    use_ackermann_roi_shape: false
+
+    cluster_distance_threshold: 0.18
+    cluster_distance_scale: 0.04
+    min_cluster_points: 3
+    max_cluster_width: 2.0
+
+    track_match_distance: 0.7
+    max_missed_frames: 5
+    velocity_filter_alpha: 0.7
+
+    dynamic_speed_threshold: 0.15
+    dynamic_confirm_frames: 1
+
+    static_speed_threshold: 0.10
+    static_confirm_frames: 3
+
+    point_marker_scale: 0.04
+    marker_lifetime_sec: 0.2
+
+    ego_speed_mps: 0.0
+    use_ego_speed_compensation: false
+
+    enable_roi_marker: true
+    stop_on_roi_obstacle: true
+    stop_required_topic: "/lidar/stop_required"
+    slow_required_topic: "/lidar/slow_required"
+    roi_risk_level_topic: "/lidar/roi_risk_level"
+    speed_limit_topic: "/lidar/speed_limit_mps"
+    min_stop_points: 3
+    min_slow_points: 3
+    min_caution_points: 3
+    stop_confirm_frames: 1
+    stop_release_frames: 3
+    slow_confirm_frames: 1
+    slow_release_frames: 3
+    default_speed_limit_mps: 1.0
+    caution_speed_limit_mps: 0.6
+    slow_speed_limit_mps: 0.6
+    stop_speed_limit_mps: 0.0
+    curved_roi_marker_segments: 24
+
+    enable_ramp_candidate_filter: true
+    ramp_candidate_topic: "/lidar/ramp_candidate"
+    traversable_ramp_topic: "/lidar/traversable_ramp"
+    allow_ramp_pass_with_lidar_only: false
+    ramp_min_continuous_points: 8
+    ramp_max_lateral_width_m: 2.0
+    ramp_min_longitudinal_length_m: 0.8
+    ramp_candidate_speed_limit_mps: 0.3
+    use_imu_pitch_for_ramp: false
+    imu_topic: "/imu/data"
+    ramp_pitch_threshold_deg: 8.0
+    use_camera_ramp_classifier: false
+    camera_ramp_topic: "/camera/ramp_detected"
+    unknown_roi_object_policy: "slow_or_stop"
+    log_throttle_sec: 1.0
+
+    parking_side_roi:
+      enable: true
+      width_scale: 1.5
+      base_half_angle_deg: 30.0
+      search_length_m: 2.5
+      blocked_point_threshold: 8
+      free_point_threshold: 3
+      confirm_count: 3
+      marker_segments: 24
+      apex_from_drive_roi_start_midpoint: true
+      rotate_from_drive_roi_heading: true
+      show_only_for_current_lidar_role: true
+    normal_roi:
+      roi_start_x_m: 0.0
+    parking_entry:
+      t_entry_x_m: 0.50
+      t_entry_lateral_offset_m: 0.75
+      parallel_entry_x_m: 0.80
+      parallel_entry_lateral_offset_m: 0.65
+      rear_axle_offset_from_base_m: -0.13
+      ready_x_tolerance_m: 0.15
+    parking_completion:
+      enable_rear_distance_done: true
+      rear_done_distance_m: 0.50
+    static_obstacle_hold:
+      enable: true
+      hold_frames: 3
+      release_frames: 3
+    lidar_drive_filter:
+      enable: true
+      confirm_frames: 5
+      release_frames: 5
+      default_drive: 2
+      immediate_stop_on_zone0: true
+      immediate_stop_on_tf_error: true
+      min_hold_duration_sec: 1.0
+      candidate_confirm_duration_sec: 1.0
+      hold_stop_duration_sec: 1.0
+    speed_policy:
+      stop_speed_mps: 0.0
+      slow_speed_mps: 0.6
+      drive_speed_mps: 1.0
+      accel_speed_mps: 1.2

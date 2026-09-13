@@ -1,0 +1,49 @@
+parking_space_memory_node:
+  ros__parameters:
+    map_topic: /map
+    scan_topic: /scan
+    map_frame: map
+    odom_frame: odom
+    base_frame: base_link
+
+    detection_period_sec: 0.5
+    scan_timeout_sec: 2.0
+    tf_timeout_sec: 0.05
+
+    occupied_threshold: 65
+    free_threshold: 25
+    min_free_ratio: 0.85
+    max_unknown_ratio: 0.15
+    safety_margin_m: 0.30
+
+    # Initial vehicle/slot sizes. Measure the real platform and parking geometry
+    # before vehicle testing.
+    vehicle_length_m: 1.0
+    vehicle_width_m: 0.6
+    t_slot_width_m: 1.2
+    t_slot_depth_m: 1.8
+    parallel_slot_length_m: 2.0
+    parallel_slot_width_m: 1.0
+
+    search_forward_m: 4.0
+    search_backward_m: 2.0
+    search_right_min_m: 0.5
+    search_right_max_m: 3.0
+    sample_step_m: 0.40
+    nms_distance_m: 0.75
+    boundary_band_m: 0.20
+    max_candidates_per_type: 12
+
+    association_distance_m: 0.5
+    association_yaw_deg: 15.0
+    association_size_tolerance_m: 0.5
+    confirm_observations: 5
+    lost_timeout_sec: 10.0
+    delete_timeout_sec: 60.0
+    occupied_evidence_ratio: 0.02
+    minimum_map_known_ratio: 0.001
+
+    storage_path: ~/.ros/lidar_parking_planner/parking_slots.json
+    map_resolution_tolerance: 0.001
+    map_origin_tolerance_m: 0.5
+    map_origin_yaw_tolerance_deg: 5.0

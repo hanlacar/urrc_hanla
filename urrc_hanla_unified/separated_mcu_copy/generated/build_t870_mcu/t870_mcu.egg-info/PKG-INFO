@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: t870-mcu
+Version: 0.3.0
+Summary: T870 Arduino serial bridge + command arbiter
+Maintainer: t870
+Maintainer-email: user@example.com
+License: Apache-2.0

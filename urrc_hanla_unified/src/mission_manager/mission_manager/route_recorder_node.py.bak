@@ -1,0 +1,1243 @@
+"""Record versioned GPS routes with explicit direction, mode,
+drive level, steering command and route event.
+
+키보드 자동 연동:
+- /manual_drive std_msgs/msg/Float32 구독
+- /manual_wheel std_msgs/msg/Int32 구독
+- manual_drive > 0:
+    direction = forward
+    drive_level = abs(manual_drive)
+- manual_drive < 0:
+    direction = reverse
+    drive_level = abs(manual_drive)
+- manual_drive == 0:
+    마지막 direction / drive_level 유지
+- manual_wheel:
+    wheel 컬럼에 실제 조향 명령 저장
+
+주의:
+기존 route_loader.py는 drive_level을
+1.0 / 2.0 / 3.0만 허용한다.
+
+따라서:
+manual_drive = -1.0
+→ direction = -1
+→ drive_level = 1.0
+
+추가 기능:
+- CSV 저장 중 mode 변화 지점을 자동 감지
+- SEG01, SEG02 ... 자동 생성
+- <route_name>_segments.yaml 자동 생성/갱신
+- 마지막 waypoint를 goal_index로 자동 지정
+- event 저장 지원
+- STOP_LINE waypoint 저장 지원
+"""
+
+import csv
+import math
+from datetime import datetime, timezone
+from pathlib import Path
+
+import rclpy
+import yaml
+
+from rcl_interfaces.msg import SetParametersResult
+from rclpy.node import Node
+from sensor_msgs.msg import NavSatFix, NavSatStatus
+from std_msgs.msg import Float32, Int32
+
+from .geo_utils import latlon_to_xy
+
+
+VALID_EVENTS = (
+    "NONE",
+    "STOP_LINE",
+)
+
+VALID_DRIVE_LEVELS = (
+    1.0,
+    2.0,
+    3.0,
+)
+
+
+class RouteRecorder(Node):
+
+    def __init__(self) -> None:
+        super().__init__(
+            "gps_route_recorder"
+        )
+
+        # ------------------------------------------------------
+        # Parameters
+        # ------------------------------------------------------
+
+        for name, value in (
+            (
+                "out_csv",
+                "reference_course.csv",
+            ),
+            (
+                "fix_topic",
+                "/fix",
+            ),
+            (
+                "manual_drive_topic",
+                "/manual_drive",
+            ),
+            (
+                "manual_wheel_topic",
+                "/manual_wheel",
+            ),
+            (
+                "min_spacing_m",
+                0.15,
+            ),
+            (
+                "record_direction",
+                "forward",
+            ),
+            (
+                "record_mode",
+                1,
+            ),
+            (
+                "record_drive_level",
+                2.0,
+            ),
+            (
+                "record_event",
+                "NONE",
+            ),
+        ):
+            self.declare_parameter(
+                name,
+                value,
+            )
+
+        # ------------------------------------------------------
+        # Output paths
+        # ------------------------------------------------------
+
+        self.out = Path(
+            str(
+                self.get_parameter(
+                    "out_csv"
+                ).value
+            )
+        )
+
+        self.out.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        self.metadata_path = (
+            self.out.with_suffix(
+                ".yaml"
+            )
+        )
+
+        self.segment_metadata_path = (
+            self.out.with_name(
+                self.out.stem
+                + "_segments.yaml"
+            )
+        )
+
+        # ------------------------------------------------------
+        # Recorder state
+        # ------------------------------------------------------
+
+        self.spacing = float(
+            self.get_parameter(
+                "min_spacing_m"
+            ).value
+        )
+
+        self.origin = None
+        self.last = None
+
+        self.count = 0
+
+        # mode / direction / drive / wheel / event
+        # 변경 직후 다음 유효 GPS fix를 강제로 기록
+        self.force_record = True
+
+        # ------------------------------------------------------
+        # Manual command state
+        # ------------------------------------------------------
+
+        initial_direction = str(
+            self.get_parameter(
+                "record_direction"
+            ).value
+        )
+
+        self.current_direction = (
+            1
+            if initial_direction == "forward"
+            else -1
+        )
+
+        self.current_drive_level = float(
+            self.get_parameter(
+                "record_drive_level"
+            ).value
+        )
+
+        self.current_wheel = 0
+
+        self.manual_drive_received = False
+        self.manual_wheel_received = False
+
+        # ------------------------------------------------------
+        # Segment state
+        # ------------------------------------------------------
+
+        self.segments = []
+
+        self.current_segment_mode = None
+        self.current_segment_start = None
+
+        # ------------------------------------------------------
+        # CSV
+        # ------------------------------------------------------
+
+        self.stream = self.out.open(
+            "w",
+            newline="",
+            encoding="utf-8",
+        )
+
+        self.writer = csv.writer(
+            self.stream
+        )
+
+        self.writer.writerow(
+            (
+                "index",
+                "latitude",
+                "longitude",
+                "x_m",
+                "y_m",
+                "direction",
+                "mode",
+                "drive_level",
+                "wheel",
+                "event",
+            )
+        )
+
+        self.stream.flush()
+
+        # ------------------------------------------------------
+        # ROS parameter callback
+        # ------------------------------------------------------
+
+        self.add_on_set_parameters_callback(
+            self._parameters_changed
+        )
+
+        # ------------------------------------------------------
+        # GPS subscription
+        # ------------------------------------------------------
+
+        self.create_subscription(
+            NavSatFix,
+            str(
+                self.get_parameter(
+                    "fix_topic"
+                ).value
+            ),
+            self._on_fix,
+            10,
+        )
+
+        # ------------------------------------------------------
+        # Manual drive subscription
+        # ------------------------------------------------------
+
+        self.create_subscription(
+            Float32,
+            str(
+                self.get_parameter(
+                    "manual_drive_topic"
+                ).value
+            ),
+            self._on_manual_drive,
+            10,
+        )
+
+        # ------------------------------------------------------
+        # Manual wheel subscription
+        # ------------------------------------------------------
+
+        self.create_subscription(
+            Int32,
+            str(
+                self.get_parameter(
+                    "manual_wheel_topic"
+                ).value
+            ),
+            self._on_manual_wheel,
+            10,
+        )
+
+        self.get_logger().info(
+            "Recording GPS reference route\n"
+            f"CSV: "
+            f"{self.out.resolve()}\n"
+            f"Metadata: "
+            f"{self.metadata_path.resolve()}\n"
+            f"Segments: "
+            f"{self.segment_metadata_path.resolve()}\n"
+            f"Fix topic: "
+            f"{self.get_parameter('fix_topic').value}\n"
+            f"Manual drive topic: "
+            f"{self.get_parameter('manual_drive_topic').value}\n"
+            f"Manual wheel topic: "
+            f"{self.get_parameter('manual_wheel_topic').value}\n"
+            f"Initial direction: "
+            f"{'FORWARD' if self.current_direction > 0 else 'REVERSE'}\n"
+            f"Initial drive level: "
+            f"{self.current_drive_level:.2f}\n"
+            f"Initial wheel: "
+            f"{self.current_wheel}\n"
+            f"Mode: "
+            f"{self.get_parameter('record_mode').value}\n"
+            f"Event: "
+            f"{self.get_parameter('record_event').value}"
+        )
+
+    # ==========================================================
+    # Manual drive callback
+    # ==========================================================
+
+    def _on_manual_drive(
+        self,
+        msg: Float32,
+    ) -> None:
+
+        value = float(
+            msg.data
+        )
+
+        if not math.isfinite(
+            value
+        ):
+            self.get_logger().warning(
+                "Ignored non-finite /manual_drive"
+            )
+            return
+
+        self.manual_drive_received = True
+
+        # ------------------------------------------------------
+        # Stop command
+        #
+        # drive_level=0은 기존 route_loader에서 허용하지 않으므로
+        # direction / drive_level을 덮어쓰지 않는다.
+        # ------------------------------------------------------
+
+        if abs(value) < 1.0e-6:
+            return
+
+        # ------------------------------------------------------
+        # Direction
+        # ------------------------------------------------------
+
+        new_direction = (
+            1
+            if value > 0.0
+            else -1
+        )
+
+        # ------------------------------------------------------
+        # Drive level
+        #
+        # 후진 -1.0도 CSV에는:
+        # direction=-1
+        # drive_level=1.0
+        # ------------------------------------------------------
+
+        new_drive_level = abs(
+            value
+        )
+
+        if new_drive_level not in VALID_DRIVE_LEVELS:
+
+            self.get_logger().warning(
+                "Ignored unsupported "
+                "/manual_drive value: "
+                f"{value:.3f}; "
+                "expected ±1, ±2, ±3 "
+                "or 0"
+            )
+
+            return
+
+        changed = (
+            new_direction
+            != self.current_direction
+            or new_drive_level
+            != self.current_drive_level
+        )
+
+        self.current_direction = (
+            new_direction
+        )
+
+        self.current_drive_level = (
+            new_drive_level
+        )
+
+        if changed:
+
+            self.force_record = True
+
+            self.get_logger().info(
+                "Manual drive changed: "
+                f"raw={value:.2f} "
+                f"direction="
+                f"{self.current_direction} "
+                f"drive_level="
+                f"{self.current_drive_level:.2f}"
+            )
+
+    # ==========================================================
+    # Manual wheel callback
+    # ==========================================================
+
+    def _on_manual_wheel(
+        self,
+        msg: Int32,
+    ) -> None:
+
+        new_wheel = int(
+            msg.data
+        )
+
+        self.manual_wheel_received = True
+
+        if (
+            new_wheel
+            == self.current_wheel
+        ):
+            return
+
+        self.current_wheel = (
+            new_wheel
+        )
+
+        # 조향 입력이 바뀐 지점도
+        # 다음 GPS fix에서 반드시 남긴다.
+        self.force_record = True
+
+        self.get_logger().info(
+            "Manual wheel changed: "
+            f"wheel="
+            f"{self.current_wheel}"
+        )
+
+    # ==========================================================
+    # Runtime parameter change
+    # ==========================================================
+
+    def _parameters_changed(
+        self,
+        params,
+    ):
+
+        for param in params:
+
+            # --------------------------------------------------
+            # Direction validation
+            # --------------------------------------------------
+
+            if (
+                param.name
+                == "record_direction"
+                and param.value
+                not in (
+                    "forward",
+                    "reverse",
+                )
+            ):
+                return SetParametersResult(
+                    successful=False,
+                    reason=(
+                        "direction must be "
+                        "forward/reverse"
+                    ),
+                )
+
+            # --------------------------------------------------
+            # Mode validation
+            # --------------------------------------------------
+
+            if (
+                param.name
+                == "record_mode"
+            ):
+                try:
+                    mode_value = int(
+                        param.value
+                    )
+                except (
+                    ValueError,
+                    TypeError,
+                ):
+                    return SetParametersResult(
+                        successful=False,
+                        reason=(
+                            "mode must be "
+                            "integer 1~11"
+                        ),
+                    )
+
+                if not (
+                    1
+                    <= mode_value
+                    <= 11
+                ):
+                    return SetParametersResult(
+                        successful=False,
+                        reason=(
+                            "mode must be "
+                            "integer 1~11"
+                        ),
+                    )
+
+            # --------------------------------------------------
+            # Drive level validation
+            # --------------------------------------------------
+
+            if (
+                param.name
+                == "record_drive_level"
+            ):
+
+                try:
+                    drive_value = float(
+                        param.value
+                    )
+                except (
+                    ValueError,
+                    TypeError,
+                ):
+                    return SetParametersResult(
+                        successful=False,
+                        reason=(
+                            "drive level must "
+                            "be numeric"
+                        ),
+                    )
+
+                if (
+                    drive_value
+                    not in VALID_DRIVE_LEVELS
+                ):
+                    return SetParametersResult(
+                        successful=False,
+                        reason=(
+                            "drive level must be "
+                            "1/2/3"
+                        ),
+                    )
+
+            # --------------------------------------------------
+            # Event validation
+            # --------------------------------------------------
+
+            if (
+                param.name
+                == "record_event"
+            ):
+
+                event = str(
+                    param.value
+                ).strip().upper()
+
+                if (
+                    event
+                    not in VALID_EVENTS
+                ):
+
+                    return SetParametersResult(
+                        successful=False,
+                        reason=(
+                            "event must be "
+                            "NONE or STOP_LINE"
+                        ),
+                    )
+
+            # --------------------------------------------------
+            # Compatibility fallback
+            #
+            # manual_drive를 아직 한 번도 받지 않은 경우에만
+            # 기존 direction / drive_level parameter를 반영한다.
+            # --------------------------------------------------
+
+            if (
+                not self.manual_drive_received
+                and param.name
+                == "record_direction"
+            ):
+
+                self.current_direction = (
+                    1
+                    if param.value
+                    == "forward"
+                    else -1
+                )
+
+            if (
+                not self.manual_drive_received
+                and param.name
+                == "record_drive_level"
+            ):
+
+                self.current_drive_level = float(
+                    param.value
+                )
+
+            # --------------------------------------------------
+            # Boundary recording
+            # --------------------------------------------------
+
+            if param.name in (
+                "record_direction",
+                "record_mode",
+                "record_drive_level",
+                "record_event",
+            ):
+
+                self.force_record = True
+
+                self.get_logger().info(
+                    "Recording boundary requested: "
+                    f"{param.name}="
+                    f"{param.value}"
+                )
+
+        return SetParametersResult(
+            successful=True
+        )
+
+    # ==========================================================
+    # GPS callback
+    # ==========================================================
+
+    def _on_fix(
+        self,
+        msg: NavSatFix,
+    ) -> None:
+
+        # ------------------------------------------------------
+        # GPS validity
+        # ------------------------------------------------------
+
+        if (
+            msg.status.status
+            == NavSatStatus.STATUS_NO_FIX
+            or not math.isfinite(
+                msg.latitude
+            )
+            or not math.isfinite(
+                msg.longitude
+            )
+            or abs(
+                msg.latitude
+            ) < 1.0e-12
+            or abs(
+                msg.longitude
+            ) < 1.0e-12
+        ):
+            return
+
+        # ------------------------------------------------------
+        # First point -> origin
+        # ------------------------------------------------------
+
+        if (
+            self.origin
+            is None
+        ):
+
+            self.origin = (
+                msg.latitude,
+                msg.longitude,
+            )
+
+            self._write_metadata()
+
+        # ------------------------------------------------------
+        # GPS -> local XY
+        # ------------------------------------------------------
+
+        x, y = latlon_to_xy(
+            msg.latitude,
+            msg.longitude,
+            *self.origin,
+        )
+
+        distance_ok = (
+            self.last is None
+            or math.hypot(
+                x
+                - self.last[0],
+                y
+                - self.last[1],
+            )
+            >= self.spacing
+        )
+
+        if not (
+            self.force_record
+            or distance_ok
+        ):
+            return
+
+        # ------------------------------------------------------
+        # Current state
+        # ------------------------------------------------------
+
+        direction = int(
+            self.current_direction
+        )
+
+        mode = str(
+            int(
+                self.get_parameter(
+                    "record_mode"
+                ).value
+            )
+        )
+
+        level = float(
+            self.current_drive_level
+        )
+
+        wheel = int(
+            self.current_wheel
+        )
+
+        event = str(
+            self.get_parameter(
+                "record_event"
+            ).value
+        ).strip().upper()
+
+        if (
+            event
+            not in VALID_EVENTS
+        ):
+
+            self.get_logger().error(
+                "Invalid record_event: "
+                f"{event}"
+            )
+
+            return
+
+        if (
+            level
+            not in VALID_DRIVE_LEVELS
+        ):
+
+            self.get_logger().error(
+                "Invalid drive_level: "
+                f"{level}; "
+                "route point not recorded"
+            )
+
+            return
+
+        waypoint_index = (
+            self.count
+        )
+
+        # ------------------------------------------------------
+        # CSV write
+        # ------------------------------------------------------
+
+        self.writer.writerow(
+            (
+                waypoint_index,
+                f"{msg.latitude:.10f}",
+                f"{msg.longitude:.10f}",
+                f"{x:.3f}",
+                f"{y:.3f}",
+                direction,
+                mode,
+                f"{level:.2f}",
+                wheel,
+                event,
+            )
+        )
+
+        self.stream.flush()
+
+        # ------------------------------------------------------
+        # Logging
+        # ------------------------------------------------------
+
+        self.get_logger().info(
+            "Waypoint recorded: "
+            f"index={waypoint_index} "
+            f"x={x:.2f} "
+            f"y={y:.2f} "
+            f"dir={direction} "
+            f"drive={level:.2f} "
+            f"wheel={wheel} "
+            f"mode={mode}"
+        )
+
+        if (
+            event
+            != "NONE"
+        ):
+
+            self.get_logger().info(
+                "Route event recorded: "
+                f"index="
+                f"{waypoint_index} "
+                f"event="
+                f"{event} "
+                f"x="
+                f"{x:.2f} "
+                f"y="
+                f"{y:.2f}"
+            )
+
+        # ------------------------------------------------------
+        # Segment update
+        # ------------------------------------------------------
+
+        self._update_segment(
+            waypoint_index,
+            mode,
+        )
+
+        self._write_segment_metadata(
+            current_end_index=(
+                waypoint_index
+            )
+        )
+
+        # ------------------------------------------------------
+        # Recorder state
+        # ------------------------------------------------------
+
+        self.last = (
+            x,
+            y,
+        )
+
+        self.count += 1
+
+        self.force_record = False
+
+    # ==========================================================
+    # Segment handling
+    # ==========================================================
+
+    def _update_segment(
+        self,
+        waypoint_index: int,
+        mode: str,
+    ) -> None:
+
+        # ------------------------------------------------------
+        # First waypoint
+        # ------------------------------------------------------
+
+        if (
+            self.current_segment_mode
+            is None
+        ):
+
+            self.current_segment_mode = (
+                mode
+            )
+
+            self.current_segment_start = (
+                waypoint_index
+            )
+
+            self.get_logger().info(
+                "Segment start: "
+                "SEG01 "
+                f"mode={mode} "
+                f"index="
+                f"{waypoint_index}"
+            )
+
+            return
+
+        # ------------------------------------------------------
+        # Same mode
+        # ------------------------------------------------------
+
+        if (
+            mode
+            == self.current_segment_mode
+        ):
+            return
+
+        # ------------------------------------------------------
+        # Mode changed
+        # ------------------------------------------------------
+
+        previous_end = (
+            waypoint_index
+            - 1
+        )
+
+        segment_id = (
+            f"SEG"
+            f"{len(self.segments) + 1:02d}"
+        )
+
+        self.segments.append(
+            {
+                "id":
+                    segment_id,
+
+                "mode":
+                    self.current_segment_mode,
+
+                "start_index":
+                    int(
+                        self.current_segment_start
+                    ),
+
+                "end_index":
+                    int(
+                        previous_end
+                    ),
+            }
+        )
+
+        self.get_logger().info(
+            "Segment complete: "
+            f"{segment_id} "
+            f"mode="
+            f"{self.current_segment_mode} "
+            f"index="
+            f"{self.current_segment_start}"
+            f"~{previous_end}"
+        )
+
+        # ------------------------------------------------------
+        # Start new segment
+        # ------------------------------------------------------
+
+        self.current_segment_mode = (
+            mode
+        )
+
+        self.current_segment_start = (
+            waypoint_index
+        )
+
+        next_segment_id = (
+            f"SEG"
+            f"{len(self.segments) + 1:02d}"
+        )
+
+        self.get_logger().info(
+            "Segment start: "
+            f"{next_segment_id} "
+            f"mode={mode} "
+            f"index="
+            f"{waypoint_index}"
+        )
+
+    # ==========================================================
+    # Route metadata
+    # ==========================================================
+
+    def _write_metadata(
+        self,
+    ) -> None:
+
+        if (
+            self.origin
+            is None
+        ):
+            return
+
+        metadata = {
+            "format_version":
+                1,
+
+            "origin_lat":
+                self.origin[0],
+
+            "origin_lon":
+                self.origin[1],
+
+            "loop":
+                False,
+
+            "created_at":
+                datetime.now(
+                    timezone.utc
+                ).isoformat(),
+        }
+
+        with self.metadata_path.open(
+            "w",
+            encoding="utf-8",
+        ) as stream:
+
+            yaml.safe_dump(
+                metadata,
+                stream,
+                sort_keys=False,
+            )
+
+    # ==========================================================
+    # Segment metadata
+    # ==========================================================
+
+    def _write_segment_metadata(
+        self,
+        current_end_index=None,
+    ) -> None:
+
+        if (
+            self.count == 0
+            and current_end_index
+            is None
+        ):
+            return
+
+        segments = [
+            dict(segment)
+            for segment
+            in self.segments
+        ]
+
+        # 현재 열려 있는 마지막 segment도 YAML에 포함
+
+        if (
+            self.current_segment_mode
+            is not None
+            and self.current_segment_start
+            is not None
+        ):
+
+            if (
+                current_end_index
+                is None
+            ):
+
+                end_index = max(
+                    0,
+                    self.count
+                    - 1,
+                )
+
+            else:
+
+                end_index = int(
+                    current_end_index
+                )
+
+            current_id = (
+                f"SEG"
+                f"{len(segments) + 1:02d}"
+            )
+
+            segments.append(
+                {
+                    "id":
+                        current_id,
+
+                    "mode":
+                        self.current_segment_mode,
+
+                    "start_index":
+                        int(
+                            self.current_segment_start
+                        ),
+
+                    "end_index":
+                        end_index,
+                }
+            )
+
+        if not segments:
+            return
+
+        goal_index = max(
+            int(
+                segment[
+                    "end_index"
+                ]
+            )
+            for segment
+            in segments
+        )
+
+        data = {
+            "goal_index":
+                goal_index,
+
+            "segments":
+                segments,
+        }
+
+        with (
+            self.segment_metadata_path.open(
+                "w",
+                encoding="utf-8",
+            )
+        ) as stream:
+
+            yaml.safe_dump(
+                data,
+                stream,
+                allow_unicode=True,
+                sort_keys=False,
+            )
+
+    # ==========================================================
+    # Shutdown
+    # ==========================================================
+
+    def destroy_node(
+        self,
+    ) -> None:
+
+        # ------------------------------------------------------
+        # Finalize last segment
+        # ------------------------------------------------------
+
+        if (
+            self.count > 0
+            and self.current_segment_mode
+            is not None
+            and self.current_segment_start
+            is not None
+        ):
+
+            final_end = (
+                self.count
+                - 1
+            )
+
+            final_id = (
+                f"SEG"
+                f"{len(self.segments) + 1:02d}"
+            )
+
+            self.segments.append(
+                {
+                    "id":
+                        final_id,
+
+                    "mode":
+                        self.current_segment_mode,
+
+                    "start_index":
+                        int(
+                            self.current_segment_start
+                        ),
+
+                    "end_index":
+                        int(
+                            final_end
+                        ),
+                }
+            )
+
+            self.current_segment_mode = (
+                None
+            )
+
+            self.current_segment_start = (
+                None
+            )
+
+            if (
+                self.segments
+            ):
+
+                data = {
+                    "goal_index":
+                        final_end,
+
+                    "segments":
+                        self.segments,
+                }
+
+                with (
+                    self.segment_metadata_path.open(
+                        "w",
+                        encoding="utf-8",
+                    )
+                ) as stream:
+
+                    yaml.safe_dump(
+                        data,
+                        stream,
+                        allow_unicode=True,
+                        sort_keys=False,
+                    )
+
+                self.get_logger().info(
+                    "Segment metadata finalized: "
+                    f"{self.segment_metadata_path.resolve()} "
+                    f"segments="
+                    f"{len(self.segments)} "
+                    f"goal_index="
+                    f"{final_end}"
+                )
+
+        # ------------------------------------------------------
+        # CSV close
+        # ------------------------------------------------------
+
+        if (
+            not self.stream.closed
+        ):
+
+            self.stream.flush()
+
+            self.stream.close()
+
+        super().destroy_node()
+
+
+def main() -> None:
+
+    rclpy.init()
+
+    node = RouteRecorder()
+
+    try:
+
+        rclpy.spin(
+            node
+        )
+
+    except KeyboardInterrupt:
+
+        pass
+
+    finally:
+
+        node.destroy_node()
+
+        if (
+            rclpy.ok()
+        ):
+            rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,9 @@
+source;share/t870_mcu/hook/pythonpath.ps1
+source;share/t870_mcu/hook/pythonpath.dsv
+source;share/t870_mcu/hook/pythonpath.sh
+source;share/t870_mcu/hook/ament_prefix_path.ps1
+source;share/t870_mcu/hook/ament_prefix_path.dsv
+source;share/t870_mcu/hook/ament_prefix_path.sh
+source;../../build/t870_mcu/share/t870_mcu/hook/pythonpath_develop.ps1
+source;../../build/t870_mcu/share/t870_mcu/hook/pythonpath_develop.dsv
+source;../../build/t870_mcu/share/t870_mcu/hook/pythonpath_develop.sh

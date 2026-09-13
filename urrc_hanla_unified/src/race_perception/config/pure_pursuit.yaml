@@ -1,0 +1,5 @@
+# Compatibility file only. Active controller parameters live in
+# race_control/config/pure_pursuit.yaml.
+pure_pursuit:
+  ros__parameters:
+    commanded_speed_mps: 0.0

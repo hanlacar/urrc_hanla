@@ -1,0 +1,13 @@
+lidar_ws_plus:
+  ros__parameters:
+    use_sim_time: false
+    front_scan_topic: /front/scan
+    rear_scan_topic: /rear/scan
+    odom_topic: /odom
+    base_frame: base_link
+    odom_frame: odom
+    map_frame: map
+    front_laser_frame: front_laser
+    rear_laser_frame: rear_laser
+    odom_owner: mcu_bridge
+    saved_map_map_odom_owner: amcl

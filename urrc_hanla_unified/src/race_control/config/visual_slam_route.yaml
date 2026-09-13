@@ -1,0 +1,32 @@
+visual_slam_route:
+  ros__parameters:
+    route_file: ""
+    map_frame: "map"
+    base_frame: "base_link"
+    record_on_start: true
+    record_rate_hz: 10.0
+    minimum_sample_distance_m: 0.10
+    minimum_sample_yaw_deg: 5.0
+    minimum_route_points: 20
+    publish_rate_hz: 20.0
+    forward_min_m: 0.30
+    forward_max_m: 6.0
+    minimum_local_points: 5
+    maximum_route_error_m: 1.5
+    maximum_heading_error_deg: 75.0
+    tf_timeout_sec: 0.10
+    pose_timeout_sec: 0.50
+    bev_path_topic: "/camera/bev/path"
+    bev_valid_topic: "/camera/bev/path_valid"
+    bev_confidence_topic: "/camera/bev/path_confidence"
+    bev_timeout_sec: 0.30
+    bev_minimum_confidence: 0.45
+    odom_topic: "/rtabmap/odom"
+    # Reject BEV correction if its source RGB frame has no nearby SLAM odom.
+    slam_bev_max_skew_sec: 0.10
+    bev_correction_gain: 0.55
+    # BEV cannot move the saved SLAM route more than this lateral distance.
+    bev_maximum_correction_m: 0.35
+    output_path_topic: "/camera/path"
+    output_valid_topic: "/camera/path_valid"
+    output_confidence_topic: "/camera/path_confidence"

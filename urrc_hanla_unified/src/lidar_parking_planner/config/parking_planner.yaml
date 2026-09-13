@@ -1,0 +1,65 @@
+parking_planner_node:
+  ros__parameters:
+    localization_mode: scan_only
+    require_odom_for_reverse: false
+
+    base_frame: base_link
+    front_scan_topic: /front/scan
+    rear_scan_topic: /rear/scan
+    odom_topic: /odom
+
+    safety_margin_m: 0.5
+    max_steering_deg: 45.0
+
+    forward_scan_speed_mps: 0.20
+    forward_align_speed_mps: 0.15
+    reverse_speed_mps: -0.15
+    exit_speed_mps: 0.20
+    t_reverse_steering_deg: -30.0
+    parallel_phase1_steering_deg: -35.0
+    parallel_phase2_steering_deg: 30.0
+    exit_right_steering_deg: -30.0
+    parallel_phase1_duration_sec: 2.0
+    parallel_phase2_duration_sec: 2.0
+    parallel_phase3_duration_sec: 1.0
+
+    rear_done_distance_m: 0.75
+    min_clearance_m: 0.5
+    scan_timeout_sec: 0.5
+    tf_timeout_sec: 0.05
+
+    slot_min_depth_m: 1.0
+    slot_max_points: 3
+    slot_confirm_frames: 3
+    slot_a_x_min: 0.0
+    slot_a_x_max: 1.0
+    slot_b_x_min: -1.0
+    slot_b_x_max: 0.0
+    slot_right_y_min: -2.0
+    slot_right_y_max: -1.0
+    front_curb_min_m: 0.5
+    front_curb_max_m: 1.0
+    backup_ready_stop_sec: 0.5
+    parallel_align_duration_sec: 1.0
+
+    cmd_drive_topic: cmd_drive
+    cmd_wheel_topic: cmd_wheel
+
+    # Disabled by default. The dedicated test launch enables this input and its
+    # fail-closed request watchdog without changing the normal planner launch.
+    constant_drive_test_enabled: false
+    test_command_timeout_sec: 0.5
+
+    # Drive-only front LiDAR safety gate. /scan 0 rad is the verified vehicle front.
+    safety_scan_topic: /scan
+    stop_distance_m: 0.50
+    resume_distance_m: 0.60
+    front_sector_deg: 30.0
+    min_valid_range_m: 0.05
+    stop_confirm_scans: 2
+    clear_confirm_scans: 3
+    stop_on_scan_timeout: true
+
+    front_scan_yaw_offset_deg: 180.0
+    rear_scan_yaw_offset_deg: 0.0
+    marker_yaw_offset_deg: 180.0

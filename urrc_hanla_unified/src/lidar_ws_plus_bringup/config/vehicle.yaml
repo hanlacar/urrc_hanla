@@ -1,0 +1,31 @@
+lidar_ws_plus_vehicle:
+  ros__parameters:
+    # Physical/parking geometry from t_parking_sim's measured-vehicle model.
+    vehicle_length_m: 1.33
+    vehicle_width_m: 0.78
+    body_width_m: 0.74
+    wheelbase_m: 0.73
+    front_track_width_m: 0.775
+    rear_track_width_m: 0.785
+    wheel_radius_m: 0.135
+    steering_limit_deg: 22.0
+    mcu_wheel_limit_deg: 27
+    steering_negative_is_left: true
+
+    # Selected integration TF candidates. These remain launch-overridable.
+    front_lidar_x_m: 0.730
+    front_lidar_y_m: 0.0
+    front_lidar_z_m: 0.105
+    front_lidar_roll_rad: 0.0
+    front_lidar_pitch_rad: 0.0
+    front_lidar_yaw_rad: 0.0
+    rear_lidar_x_m: -0.680
+    rear_lidar_y_m: 0.0
+    rear_lidar_z_m: 0.155
+    rear_lidar_roll_rad: 0.0
+    rear_lidar_pitch_rad: 0.0
+    rear_lidar_yaw_rad: 3.14159265359
+
+    # Context-specific values intentionally remain in their source configs:
+    # avoidance wheelbase=0.77, length=1.30, max steering=25/27 deg;
+    # legacy parking-memory footprint=1.00 x 0.60 m.

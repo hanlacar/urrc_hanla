@@ -1,0 +1,9 @@
+autonomy_output_node:
+  ros__parameters:
+    observation_topic: /autonomy/observation
+    path_output_topic: /autonomy/path
+    publish_rate_hz: 20.0
+    perception_timeout_sec: 0.5
+    imu_timeout_sec: 0.2
+    speed_timeout_sec: 0.5
+    path_timeout_sec: 0.5

@@ -1,0 +1,42 @@
+Starting >>> rplidar_ros
+Starting >>> avoidance_planner
+Finished <<< avoidance_planner [0.95s]
+Starting >>> avoidance_route
+Finished <<< rplidar_ros [1.14s]
+Starting >>> camera_navigation
+Finished <<< avoidance_route [0.96s]
+Starting >>> mission_manager
+Finished <<< camera_navigation [0.95s]
+Starting >>> race_interfaces
+Finished <<< mission_manager [0.98s]
+Starting >>> race_perception
+Finished <<< race_perception [0.88s]
+Starting >>> race_vehicle_interface
+Finished <<< race_vehicle_interface [1.01s]
+Starting >>> t_parking_sim
+Finished <<< race_interfaces [2.87s]
+Starting >>> avoidance_lidar
+Finished <<< avoidance_lidar [0.93s]
+Starting >>> lidar_motion_detector
+Finished <<< lidar_motion_detector [1.20s]
+Starting >>> race_control
+Finished <<< t_parking_sim [3.11s]
+Starting >>> lidar_ws_plus_bringup
+Finished <<< race_control [0.96s]
+Starting >>> camera_bringup
+Finished <<< camera_bringup [0.60s]
+Starting >>> imu_manager
+Finished <<< lidar_ws_plus_bringup [0.95s]
+Starting >>> rtk_gnss
+Finished <<< rtk_gnss [0.84s]
+Starting >>> camera_yolo_inference
+Finished <<< imu_manager [1.05s]
+Starting >>> lidar_parking_planner
+Finished <<< camera_yolo_inference [1.01s]
+Starting >>> mission_sim
+Finished <<< lidar_parking_planner [1.13s]
+Starting >>> hanla_unified
+Finished <<< mission_sim [0.95s]
+Finished <<< hanla_unified [0.96s]
+
+Summary: 20 packages finished [11.9s]

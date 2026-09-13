@@ -1,0 +1,30 @@
+vehicle_interface_node:
+  ros__parameters:
+    # Safety lock: do not change until the motor driver contract is verified.
+    allow_actuation: false
+    steering_only: false
+
+    encoder_topic: /inpulse
+    rpm_topic: /rpm
+    steering_feedback_topic: /steer_angle
+    target_speed_topic: /camera/target_speed_mps
+    target_steering_topic: /camera/target_steering_deg
+    cmd_driving_topic: /mcu_drive
+    cmd_steer_topic: /mcu_wheel
+
+    # Encoder is expected at 10 Hz; 0.5 s permits several missed samples.
+    feedback_timeout_sec: 0.5
+    target_timeout_sec: 0.3
+    command_rate_hz: 20.0
+
+    maximum_steering_deg: 27.0
+    # T870 v29 measured calibration:
+    # ROS stage 1 -> firmware 2.00, PWM 50  -> 0.229 m/s
+    # ROS stage 2 -> firmware 3.00, PWM 100 -> 0.455 m/s (loaded vehicle)
+    # ROS stage 3 -> firmware 4.00, PWM 150 -> 0.900 m/s.
+    # 2 / 0.455 provides the linear fallback used by this optional adapter.
+    # allow_actuation remains false, so this calibration does not unlock motion.
+    maximum_abs_stage: 3
+    stage_per_mps: 4.3956043956
+    stage_sign: 1.0
+    steering_sign: 1.0

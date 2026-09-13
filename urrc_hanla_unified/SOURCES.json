@@ -1,0 +1,12 @@
+{
+  "mmission_ws-main": {
+    "sha256": "f671720f1d1f6c0eea3bcd0fdd5fe68fce11209bead7610f926e1dcc3c07716e"
+  },
+  "Lidar_ws_plus-main": {
+    "sha256": "6b32aec3758bad99196d0941bfa00760c4b7d868026b104a3f92a6d06a504df1"
+  },
+  "camera_and_mcu_source": {
+    "path": "/home/werwerwer/urrc_hanla/src",
+    "note": "Copied from the previously verified camera and T870 MCU integration"
+  }
+}

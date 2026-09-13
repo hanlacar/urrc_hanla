@@ -1,0 +1,229 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 38; 38; 38
+    Fixed Frame: odom
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Plane: XY
+      Cell Size: 1
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.35
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Topic:
+        Value: /robot_description
+      Visual Enabled: true
+      Collision Enabled: false
+    - Class: rviz_default_plugins/LaserScan
+      Name: Front LaserScan
+      Enabled: true
+      Topic:
+        Value: /scan_front
+      Style: Points
+      Size (Pixels): 3
+      Color: 255; 255; 255
+      Decay Time: 0
+    - Class: rviz_default_plugins/PointCloud2
+      Name: ROI Points
+      Enabled: true
+      Topic:
+        Value: /avoidance/lidar/roi_points
+      Style: Points
+      Size (Pixels): 5
+      Color Transformer: FlatColor
+      Color: 255; 128; 0
+    - Class: rviz_default_plugins/Marker
+      Name: ROI Boundary
+      Enabled: true
+      Topic:
+        Value: /avoidance/lidar/roi_marker
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Obstacles
+      Enabled: true
+      Topic:
+        Value: /avoidance/lidar/obstacles
+    - Class: rviz_default_plugins/Marker
+      Name: Nearest Obstacle
+      Enabled: true
+      Topic:
+        Value: /avoidance/lidar/nearest_marker
+    - Class: rviz_default_plugins/Odometry
+      Name: Vehicle Odometry
+      Enabled: true
+      Topic:
+        Value: /odom
+    - Class: rviz_default_plugins/Path
+      Name: Recording Path
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/live_path
+      Line Style: Lines
+      Line Width: 0.04
+      Color: 0; 255; 0
+    - Class: rviz_default_plugins/Path
+      Name: Persisted Path
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/saved_path
+      Line Style: Lines
+      Line Width: 0.03
+      Color: 0; 128; 255
+    - Class: rviz_default_plugins/Path
+      Name: CSV Path
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/csv_path
+      Line Style: Lines
+      Line Width: 0.03
+      Color: 0; 80; 255
+    - Class: rviz_default_plugins/Path
+      Name: Replay Reference Path
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/reference_path
+      Line Style: Lines
+      Line Width: 0.05
+      Color: 0; 80; 255
+    - Class: rviz_default_plugins/Path
+      Name: Replay Actual Path
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/actual_path
+      Line Style: Lines
+      Line Width: 0.05
+      Color: 0; 255; 0
+    - Class: rviz_default_plugins/Marker
+      Name: Route Nearest Point
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/nearest_marker
+    - Class: rviz_default_plugins/Marker
+      Name: Route Lookahead Point
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/lookahead_marker
+    - Class: rviz_default_plugins/Marker
+      Name: Current Target Segment
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/segment_marker
+    - Class: rviz_default_plugins/Marker
+      Name: Route Goal
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/goal_marker
+    - Class: rviz_default_plugins/Marker
+      Name: Replay Status
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/status_marker
+    - Class: rviz_default_plugins/Path
+      Name: Selected Avoidance Path
+      Enabled: true
+      Topic:
+        Value: /avoidance/selected_path
+      Line Style: Lines
+      Line Width: 0.10
+      Color: 255; 0; 255
+    - Class: rviz_default_plugins/Path
+      Name: Actual Avoidance Path
+      Enabled: true
+      Topic:
+        Value: /avoidance/actual_avoidance_path
+      Line Style: Lines
+      Line Width: 0.08
+      Color: 0; 255; 255
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Candidate Avoidance Paths
+      Enabled: true
+      Topic:
+        Value: /avoidance/candidate_paths
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Static Obstacles
+      Enabled: true
+      Topic:
+        Value: /avoidance/static_obstacles
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Dynamic Obstacles
+      Enabled: true
+      Topic:
+        Value: /avoidance/dynamic_obstacles
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Detected Walls
+      Enabled: true
+      Topic:
+        Value: /avoidance/walls
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Unknown Objects
+      Enabled: true
+      Topic:
+        Value: /avoidance/unknown_objects
+    - Class: rviz_default_plugins/Marker
+      Name: Safe Corridor
+      Enabled: true
+      Topic:
+        Value: /avoidance/corridor_marker
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Planning Points And Footprint
+      Enabled: true
+      Topic:
+        Value: /avoidance/planning_points
+    - Class: rviz_default_plugins/Marker
+      Name: Planner Status
+      Enabled: true
+      Topic:
+        Value: /avoidance/planner_status_marker
+    - Class: rviz_default_plugins/Marker
+      Name: CSV Traveled
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/traveled_marker
+    - Class: rviz_default_plugins/Marker
+      Name: CSV Remaining
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/remaining_marker
+    - Class: rviz_default_plugins/Marker
+      Name: CSV Rejoin Point
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/rejoin_marker
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Obstacle Status
+      Enabled: true
+      Topic:
+        Value: /avoidance/obstacle_status
+    - Class: rviz_default_plugins/MarkerArray
+      Name: CSV Tangent Normal And Frenet Status
+      Enabled: true
+      Topic:
+        Value: /avoidance/route/local_frenet_frame
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 10
+      Focal Point:
+        X: 3.25
+        Y: 0
+        Z: 0
+Window Geometry:
+  Width: 1280
+  Height: 800

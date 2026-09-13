@@ -1,0 +1,21 @@
+encoder_serial_bridge_node:
+  ros__parameters:
+    port: /dev/ttyACM1
+    baudrate: 115200
+    reconnect_interval_sec: 1.0
+    feedback_timeout_sec: 0.2
+    # Set to -1 if physically forward rotation is reported as REVERSE.
+    direction_sign: 1
+
+measured_motion_state_node:
+  ros__parameters:
+    sensor_timeout_sec: 0.25
+
+forward_stop_controller_node:
+  ros__parameters:
+    # Safety lock. Keep false until A/B direction is verified with wheels up.
+    allow_forward_command: false
+    command_rate_hz: 20.0
+    sensor_timeout_sec: 0.25
+    forward_stage: 1
+    steering_deg: 0.0

@@ -1,0 +1,25 @@
+command_mux:
+  ros__parameters:
+    # Applied mode echoed by mcu_manager; /vehicle_mode is only a request.
+    mode_topic: /mcu/current_mode
+    parking_modes: [T_PARK, PARALLEL_PARK]
+    # Preserved from avoidance_sim. Current inspected MCU mode_map has no "5".
+    avoidance_modes: ['5']
+
+    parking_drive_topic: /parking/drive_cmd
+    parking_wheel_topic: /parking/wheel_cmd
+    parking_stop_topic: /parking/stop_cmd
+    avoidance_drive_topic: /avoidance/drive_cmd
+    avoidance_wheel_topic: /avoidance/wheel_cmd
+    avoidance_stop_topic: /avoidance/stop_cmd
+    lidar_safety_stop_topic: /lidar/stop_required
+    estop_topic: /estop_lock
+
+    # Matches the current mcu_manager drive/wheel freshness contract.
+    command_timeout_sec: 0.50
+    mode_timeout_sec: 0.50
+    stop_timeout_sec: 0.50
+    publish_rate_hz: 20.0
+    wheel_limit_deg: 27
+    check_publisher_conflicts: true
+    conflict_check_period_sec: 1.0

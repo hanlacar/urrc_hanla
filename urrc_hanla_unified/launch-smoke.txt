@@ -1,0 +1,60 @@
+[INFO] [launch]: All log files can be found below /tmp/urrc_unified_launch_logs/2026-09-12-14-01-24-257088-werwerwer-Predator-PHN16S-71-549
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [mission_decision-1]: process started with pid [552]
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] [37;1m2026-09-12 14:01:24.524 [31;1m[[37;1mTRANSPORT_UDP[31;1m Error] [37mError creating socket: Operation not permitted[34;1m -> Function [36minit[m
+[mission_decision-1] [37;1m2026-09-12 14:01:24.525 [31;1m[[37;1mRTPS_PARTICIPANT[31;1m Error] [37mUser transport failed to register.[34;1m -> Function [36mRTPSParticipantImpl[m
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted
+[mission_decision-1] getifaddrs: Operation not permitted

@@ -1,0 +1,49 @@
+parking_planner_node:
+  ros__parameters:
+    # /scan 0 rad is the verified vehicle front (flip_x_axis=true remains in the
+    # existing front LiDAR launch).  This file does not change LiDAR settings.
+    safety_scan_topic: /scan
+    front_sector_deg: 30.0
+    min_valid_range_m: 0.05
+
+    cluster_distance_threshold_m: 0.15
+    min_cluster_points: 3
+    association_distance_m: 0.35
+    association_angle_deg: 10.0
+    track_timeout_sec: 0.5
+
+    min_dt_sec: 0.02
+    max_dt_sec: 0.5
+    velocity_filter_alpha: 0.35
+    max_reasonable_object_speed_mps: 5.0
+
+    static_speed_threshold_mps: 0.15
+    dynamic_speed_threshold_mps: 0.30
+    classification_confirm_frames: 3
+
+    static_stop_distance_m: 0.50
+    dynamic_stop_distance_m: 0.50
+    unknown_stop_distance_m: 0.50
+    static_resume_distance_m: 0.60
+    dynamic_resume_distance_m: 0.60
+    unknown_resume_distance_m: 0.60
+    stop_confirm_frames: 2
+    clear_confirm_frames: 3
+
+    encoder_timeout_sec: 0.5
+    # Linear-speed-only compensation is not trusted during commanded turns.
+    max_steering_for_motion_classification_deg: 5.0
+
+    # Read-only source inspection found /ego_speed_mps as a std_msgs/Float32
+    # m/s consumer interface, but no publisher/encoder node was present in the
+    # live ROS graph.  Keep verification false until the actual encoder chain,
+    # forward sign, and sample values have been checked on the running vehicle.
+    encoder_speed_topic: /ego_speed_mps
+    encoder_speed_unit: mps
+    encoder_forward_sign: 1.0
+    encoder_source_verified: false
+
+    scan_timeout_sec: 0.5
+    stop_on_scan_timeout: true
+    enable_ttc_stop: false
+    ttc_stop_sec: 1.5

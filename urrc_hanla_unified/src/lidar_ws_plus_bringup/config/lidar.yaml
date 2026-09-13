@@ -1,0 +1,23 @@
+front_rplidar_node:
+  ros__parameters:
+    channel_type: serial
+    serial_port: /dev/ttyUSB0  # fallback; pass /dev/serial/by-id/... on vehicle
+    serial_baudrate: 256000
+    frame_id: front_laser
+    inverted: true
+    angle_compensate: true
+    flip_x_axis: false
+    scan_mode: Sensitivity
+    topic_name: /front/scan
+
+rear_rplidar_node:
+  ros__parameters:
+    channel_type: serial
+    serial_port: /dev/ttyUSB1  # fallback; pass a distinct by-id path on vehicle
+    serial_baudrate: 256000
+    frame_id: rear_laser
+    inverted: false
+    angle_compensate: true
+    flip_x_axis: false
+    scan_mode: Sensitivity
+    topic_name: /rear/scan

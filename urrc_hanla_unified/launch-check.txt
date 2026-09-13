@@ -1,0 +1,377 @@
+Arguments (pass arguments as '<name>:=<value>'):
+
+    'enable_camera':
+        no description given
+        (default: 'true')
+
+    'enable_lidar':
+        no description given
+        (default: 'true')
+
+    'enable_dr':
+        no description given
+        (default: 'false')
+
+    'enable_t_parking':
+        no description given
+        (default: 'false')
+
+    'enable_parallel_parking':
+        no description given
+        (default: 'false')
+
+    'parking_map':
+        no description given
+        (default: '')
+
+    'dr_route_csv':
+        no description given
+        (default: '')
+
+    'front_lidar_port':
+        no description given
+        (default: '/dev/ttyUSB0')
+
+    'launch_rqt':
+        no description given
+        (default: 'true')
+
+    'vehicle_speed_topic':
+        no description given
+        (default: '/vehicle/speed_mps')
+
+    'vehicle_speed_kph_topic':
+        no description given
+        (default: '/vehicle/speed_kph')
+
+    'vehicle_speed_valid_topic':
+        no description given
+        (default: '/vehicle/speed_valid')
+
+    'commanded_speed_mps':
+        Pure Pursuit target speed; default is propulsion locked
+        (default: '0.0')
+
+    'speed_feedback_topic':
+        Measured speed topic for dynamic lookahead
+        (default: '/vehicle/speed_mps')
+
+    'serial_no':
+        D456 serial number
+        (default: '338122302896')
+
+    'color_width':
+        RGB image width in pixels
+        (default: '640')
+
+    'color_height':
+        RGB image height in pixels
+        (default: '480')
+
+    'color_fps':
+        RGB frames per second
+        (default: '60')
+
+    'segmentation_model_path':
+        no description given
+        (default: '/home/werwerwer/urrc_hanla/urrc_hanla_unified/install/camera_yolo_inference/share/camera_yolo_inference/models/hanla_competition_11class_best_rtx5060_fp16.engine')
+
+    'class_manifest_path':
+        no description given
+        (default: '/home/werwerwer/urrc_hanla/urrc_hanla_unified/install/camera_yolo_inference/share/camera_yolo_inference/config/class_manifest.yaml')
+
+    'device':
+        no description given
+        (default: 'cuda:0')
+
+    'require_cuda':
+        no description given
+        (default: 'true')
+
+    'input_width':
+        no description given
+        (default: '640')
+
+    'input_height':
+        no description given
+        (default: '480')
+
+    'inference_fps':
+        no description given
+        (default: '40.0')
+
+    'detections_image_fps':
+        no description given
+        (default: '30.0')
+
+    'confidence_threshold':
+        no description given
+        (default: '0.25')
+
+    'mask_threshold':
+        no description given
+        (default: '0.5')
+
+    'navigation_bottom_exclusion_ratio':
+        no description given
+        (default: '0.0')
+
+    'max_image_age_sec':
+        no description given
+        (default: '0.2')
+
+    'max_inference_latency_ms':
+        no description given
+        (default: '100.0')
+
+    'input_image_topic':
+        no description given
+        (default: '/camera/image_raw')
+
+    'input_camera_info_topic':
+        no description given
+        (default: '/camera/camera_info')
+
+    'expected_image_width':
+        no description given
+        (default: '640')
+
+    'expected_image_height':
+        no description given
+        (default: '480')
+
+    'publish_diagnostics':
+        no description given
+        (default: 'true')
+
+    'use_sim_time':
+        no description given
+        (default: 'false')
+
+    'python_executable':
+        no description given
+        (default: '/home/werwerwer/urrc_hanla/urrc_hanla_unified/.yolo_runtime/bin/python')
+
+    'enable_rear_lidar':
+        no description given
+        (default: 'false')
+
+    'enable_lidar_tf':
+        no description given
+        (default: 'true')
+
+    'enable_rear_tf':
+        no description given
+        (default: 'false')
+
+    'enable_motion_detector':
+        no description given
+        (default: 'true')
+
+    'enable_avoidance':
+        no description given
+        (default: 'false')
+
+    'enable_mux':
+        no description given
+        (default: 'true')
+
+    'use_rviz':
+        no description given
+        (default: 'false')
+
+    'route_file':
+        no description given
+        (default: '')
+
+    'avoidance_auto_start':
+        no description given
+        (default: 'false')
+
+    'front_serial_port':
+        Front RPLIDAR device fallback; pass /dev/serial/by-id/... on the vehicle.
+        (default: '/dev/ttyUSB0')
+
+    'rear_serial_port':
+        Rear RPLIDAR device fallback; pass a distinct by-id path.
+        (default: '/dev/ttyUSB1')
+
+    'serial_baudrate':
+        no description given
+        (default: '256000')
+
+    'scan_mode':
+        no description given
+        (default: 'Sensitivity')
+
+    'front_laser_frame':
+        no description given
+        (default: 'front_laser')
+
+    'rear_laser_frame':
+        no description given
+        (default: 'rear_laser')
+
+    'base_frame':
+        no description given
+        (default: 'base_link')
+
+    'front_laser_inverted':
+        no description given
+        (default: 'true')
+
+    'front_laser_flip_x_axis':
+        no description given
+        (default: 'false')
+
+    'rear_laser_inverted':
+        no description given
+        (default: 'false')
+
+    'rear_laser_flip_x_axis':
+        no description given
+        (default: 'false')
+
+    'front_laser_x':
+        no description given
+        (default: '0.730')
+
+    'front_laser_y':
+        no description given
+        (default: '0.0')
+
+    'front_laser_z':
+        no description given
+        (default: '0.105')
+
+    'front_laser_roll':
+        no description given
+        (default: '0.0')
+
+    'front_laser_pitch':
+        no description given
+        (default: '0.0')
+
+    'front_laser_yaw':
+        no description given
+        (default: '0.0')
+
+    'rear_laser_x':
+        no description given
+        (default: '-0.680')
+
+    'rear_laser_y':
+        no description given
+        (default: '0.0')
+
+    'rear_laser_z':
+        no description given
+        (default: '0.155')
+
+    'rear_laser_roll':
+        no description given
+        (default: '0.0')
+
+    'rear_laser_pitch':
+        no description given
+        (default: '0.0')
+
+    'rear_laser_yaw':
+        no description given
+        (default: '3.14159265359')
+
+    'map_mode':
+        no description given
+        (default: 'saved')
+
+    'map':
+        no description given
+        (default: PathJoinSubstitution('FindPackageShare(pkg='t_parking_sim'), 'maps', 'combined_parking_map_real_vehicle.yaml''))
+
+    'front_scan_topic':
+        no description given
+        (default: '/front/scan')
+
+    'rear_scan_topic':
+        no description given
+        (default: '/rear/scan')
+
+    'initial_pose_x':
+        no description given
+        (default: '0.0')
+
+    'initial_pose_y':
+        no description given
+        (default: '0.0')
+
+    'initial_pose_yaw':
+        no description given
+        (default: '0.0')
+
+    'auto_start':
+        no description given
+        (default: 'false')
+
+    'execute':
+        no description given
+        (default: 'false')
+
+    'target_slot':
+        no description given
+        (default: 'auto')
+
+    'slot_observation_enabled':
+        Enable live A/B observation; it is used only when target_slot:=auto.
+        (default: 'true')
+
+    'parking_config':
+        Optional map-specific geometry/readiness overlay.
+        (default: PathJoinSubstitution('FindPackageShare(pkg='t_parking_sim'), 'config', 't_parking_auto.yaml''))
+
+    'fast_planning':
+        Try a configured preferred candidate before exhaustive fallback; all safety validators remain mandatory.
+        (default: 'false')
+
+    'return_to_entrance':
+        no description given
+        (default: 'true')
+
+    'stop_when_all_wheels_inside':
+        no description given
+        (default: 'true')
+
+    'exit_mode':
+        no description given
+        (default: 'forward_right')
+
+    'wheel_inside_margin':
+        no description given
+        (default: '0.01')
+
+    'wheel_inside_confirm_count':
+        no description given
+        (default: '5')
+
+    'entrance_pose_sample_count':
+        no description given
+        (default: '5')
+
+    'start_rviz':
+        no description given
+        (default: 'false')
+
+    'start_robot_state_publisher':
+        no description given
+        (default: 'true')
+
+    'params_file':
+        no description given
+        (default: PathJoinSubstitution('FindPackageShare(pkg='t_parking_sim'), 'config', 'nav2_params.yaml''))
+
+    'log_level':
+        no description given
+        (default: 'info')
+
+    'cmd_vel_output_topic':
+        Final velocity_smoother Twist output topic.
+        (default: '/cmd_vel')

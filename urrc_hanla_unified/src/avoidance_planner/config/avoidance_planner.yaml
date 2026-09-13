@@ -1,0 +1,81 @@
+avoidance_coordinator:
+  ros__parameters:
+    front_scan_topic: /front/scan
+    rear_scan_topic: /rear/scan
+    rear_lidar_required: false
+    odom_topic: /odom
+    reference_path_topic: /avoidance/route/reference_path
+    target_frame: odom
+    planning_roi_x_min_m: 0.10
+    planning_roi_x_max_m: 7.00
+    planning_roi_half_width_m: 1.30
+    self_x_min_m: -0.75
+    self_x_max_m: 0.75
+    self_y_half_width_m: 0.47
+    min_cluster_points: 4
+    min_cluster_width_m: 0.08
+    max_cluster_gap_near_m: 0.10
+    max_cluster_gap_far_m: 0.20
+    adaptive_gap_distance_m: 8.0
+    confirmation_frames: 3
+    lost_frames: 5
+    scan_timeout_sec: 0.30
+    # Full-footprint candidate validation can occupy the executor for >2 s.
+    # Retain scans until queued exact-stamp TF callbacks have caught up.
+    tf_lookup_timeout_sec: 5.0
+    association_distance_m: 0.45
+    velocity_filter_alpha: 0.35
+    dynamic_enter_speed_mps: 0.15
+    dynamic_exit_speed_mps: 0.08
+    dynamic_confirmation_frames: 3
+    dynamic_min_observations: 3
+    static_confirmation_frames: 5
+    fixed_environment_mode: false
+    fixed_obstacle_s_m: [0.0]
+    fixed_obstacle_d_m: [0.0]
+    fixed_obstacle_match_s_m: 1.50
+    fixed_obstacle_match_d_m: 0.70
+    fixed_obstacle_length_m: 1.30
+    fixed_obstacle_width_m: 0.78
+    wall_min_length_m: 1.50
+    wall_max_residual_m: 0.05
+    wall_parallel_tolerance_deg: 15.0
+    vehicle_length_m: 1.30
+    vehicle_width_m: 0.78
+    vehicle_center_x_offset_m: 0.0
+    wheelbase_m: 0.77
+    max_steering_deg: 25.0
+    obstacle_safety_lateral_m: 0.20
+    obstacle_safety_longitudinal_m: 0.15
+    minimum_obstacle_depth_m: 0.65
+    minimum_obstacle_width_m: 0.39
+    expected_obstacle_lateral_center_m: 0.78
+    curb_safety_m: 0.08
+    left_curb_inner_y_m: 1.095
+    right_curb_inner_y_m: -1.095
+    obstacle_monitor_distance_m: 5.0
+    replan_trigger_distance_m: 2.0
+    # Trigger distance is the reference-path travel from the current front
+    # bumper to the first swept-footprint collision pose (not LiDAR range).
+    collision_confirmation_frames: 3
+    front_lidar_x_offset_m: 0.65
+    emergency_stop_distance_m: 0.5
+    stopped_linear_speed_mps: 0.03
+    stopped_angular_speed_rps: 0.03
+    stopped_confirmation_sec: 0.30
+    path_sample_interval_m: 0.05
+    collision_check_interval_m: 0.02
+    return_transition_lengths_m: [2.0, 2.5, 3.0, 3.5, 4.0]
+    rejoin_straight_extension_m: 2.0
+    corridor_candidate_fractions: [0.25, 0.50, 0.75, 0.80, 0.85, 0.90]
+    adaptive_candidate_sampling: true
+    lateral_target_samples: 7
+    marker_lifetime_sec: 2.0
+    planning_rate_hz: 10.0
+    mode_topic: /mcu/current_mode
+    allowed_avoidance_modes: ['5']
+    avoidance_active_topic: /avoidance/active
+    active_publish_rate_hz: 10.0
+    odom_timeout_sec: 0.50
+    # Static camera/GPS paths may be transient-local; zero disables aging.
+    reference_path_timeout_sec: 0.0

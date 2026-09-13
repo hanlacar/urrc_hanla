@@ -1,0 +1,3 @@
+[console_scripts]
+bridge = t870_mcu.bridge_node:main
+manager = t870_mcu.manager_node:main
