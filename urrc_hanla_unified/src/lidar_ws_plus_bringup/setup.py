@@ -25,6 +25,8 @@ setup(
     ) + one_file_per_destination(
         os.path.join('share', package_name, 'config'), 'config/*.yaml'
     ) + one_file_per_destination(
+        os.path.join('share', package_name), 'rviz/*.rviz'
+    ) + one_file_per_destination(
         os.path.join('share', package_name, 'scripts'), 'scripts/*.sh'
     )),
     install_requires=['setuptools'],
@@ -37,6 +39,7 @@ setup(
     entry_points={
         'console_scripts': [
             'command_mux = lidar_ws_plus_bringup.command_mux:main',
+            'mcu_simple_compat = lidar_ws_plus_bringup.mcu_simple_compat:main',
         ],
     },
 )

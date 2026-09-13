@@ -12,7 +12,7 @@ lidar_safety:
     front_sector_deg: 90.0
     min_valid_range_m: 0.05
     corridor_width_m: 1.20
-    wheelbase_m: 0.77
+    wheelbase_m: 0.73
     roi_min_length_m: 1.50
     roi_max_length_m: 5.00
     roi_time_horizon_sec: 1.50
@@ -28,7 +28,7 @@ lidar_safety:
     scan_timeout_sec: 0.50
     command_timeout_sec: 0.30
     stop_on_scan_timeout: true
-    steering_limit_deg: 27
+    steering_limit_deg: 22
     odom_topic: /odom
     odom_timeout_sec: 0.50
     steering_sign: -1.0

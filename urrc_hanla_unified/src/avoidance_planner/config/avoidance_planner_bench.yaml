@@ -1,0 +1,6 @@
+# Lifted-vehicle bench override only.  Load after avoidance_planner.yaml.
+# Production keeps the measured curb boundaries at +/-1.095 m.
+avoidance_coordinator:
+  ros__parameters:
+    left_curb_inner_y_m: 1.50
+    right_curb_inner_y_m: -1.50

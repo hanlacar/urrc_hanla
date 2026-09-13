@@ -27,6 +27,8 @@ from .route_following import (
     load_route_csv, nearest_projection, normalize_angle, path_remaining,
     route_length, safety_reason, start_pose_matches, terminal_curvature)
 from .route_io import non_overwriting_path
+from .reference_geometry import (
+    ReferenceGeometryError, build_curvature_safe_reference)
 
 
 STATES = ('WAITING_FOR_ODOM', 'WAITING_FOR_ROUTE', 'START_POSE_CHECK',
@@ -34,6 +36,26 @@ STATES = ('WAITING_FOR_ODOM', 'WAITING_FOR_ROUTE', 'START_POSE_CHECK',
           'STOPPED_FOR_REPLAN', 'WAITING_FOR_AVOIDANCE_START',
           'FOLLOWING_AVOIDANCE', 'REJOINING_CSV', 'REJOIN_ALIGNING',
           'REJOIN_FAILED', 'TIME_RESET_STOP', 'ERROR')
+
+
+def curvature_safe_waypoints(points, wheelbase_m=0.73,
+                             max_steering_deg=22.0,
+                             output_interval_m=0.05,
+                             validation_interval_m=0.005,
+                             steering_reserve_deg=2.0,
+                             max_waypoint_displacement_m=0.02):
+    reference, report = build_curvature_safe_reference(
+        points, wheelbase_m, max_steering_deg, output_interval_m,
+        validation_interval_m, steering_reserve_deg,
+        max_waypoint_displacement_m)
+    converted = []
+    for index, point in enumerate(reference):
+        source_index = max(0, min(
+            len(points)-1, int(round(point.source_position))))
+        source = points[source_index]
+        converted.append(Waypoint(
+            index, point.x, point.y, point.yaw, 1, source.drive_level))
+    return tuple(converted), report
 
 
 class RouteFollower(Node):
@@ -46,8 +68,8 @@ class RouteFollower(Node):
             'requested_drive_topic': '/avoidance/command/drive_requested',
             'requested_wheel_topic': '/avoidance/command/wheel_requested',
             'auto_start': False, 'obstacles_enabled': False,
-            'lookahead_m': 1.20, 'wheelbase_m': 0.77,
-            'cruise_speed_mps': 1.0, 'max_steering_deg': 25.0,
+            'lookahead_m': 1.20, 'wheelbase_m': 0.73,
+            'cruise_speed_mps': 1.0, 'max_steering_deg': 22.0,
             'max_steering_change_deg_per_cycle': 2.0,
             'acceleration_limit_mps2': 0.8, 'goal_tolerance_m': 0.10,
             'start_position_tolerance_m': 0.30,
@@ -84,10 +106,16 @@ class RouteFollower(Node):
             'allowed_avoidance_modes': ['5'],
             'avoidance_active_topic': '/avoidance/active',
             'active_timeout_sec': 0.30,
+            'reference_output_interval_m': 0.05,
+            'reference_validation_interval_m': 0.005,
+            'reference_steering_reserve_deg': 2.0,
+            'reference_max_waypoint_displacement_m': 0.02,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.p = {name: self.get_parameter(name).value for name in defaults}
+        if not 0.0 < float(self.p['max_steering_deg']) <= 22.0:
+            raise ValueError('max_steering_deg must be in (0, 22]')
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.status_pub = self.create_publisher(String, '/avoidance/route/status', 10)
         self.metrics_pub = self.create_publisher(String, '/avoidance/route/metrics', qos)
@@ -129,6 +157,9 @@ class RouteFollower(Node):
         self.state = 'WAITING_FOR_ROUTE'
         self.reason = ''
         self.points = ()
+        self.raw_points = ()
+        self.reference_geometry_report = None
+        self.published_reference_signature = None
         self.route_warnings = ()
         self.odom = None
         self.odom_receive_time = None
@@ -183,12 +214,14 @@ class RouteFollower(Node):
         route_file = str(self.p['route_file']).strip()
         if route_file:
             try:
-                self.points, self.route_warnings = load_route_csv(route_file)
+                self.raw_points, self.route_warnings = load_route_csv(route_file)
+                self.points, self.reference_geometry_report = (
+                    self._build_reference(self.raw_points))
                 for warning in self.route_warnings:
                     self.get_logger().warning(f'CSV row skipped: {warning}')
                 self.state = 'WAITING_FOR_ODOM'
                 self._publish_reference()
-            except RouteError as exc:
+            except (RouteError, ReferenceGeometryError) as exc:
                 self._error('CSV_LOAD_FAILED', str(exc))
         if bool(self.p['obstacles_enabled']):
             self.get_logger().warning('OBSTACLES ENABLED: route replay start is inhibited')
@@ -211,17 +244,17 @@ class RouteFollower(Node):
         self.create_subscription(
             Bool, str(self.p['avoidance_active_topic']), self._active, 10)
         self.create_subscription(
-            LaserScan, '/scan_front', self._scan, qos_profile_sensor_data)
+            LaserScan, '/front/scan', self._scan, qos_profile_sensor_data)
         if bool(self.p['rear_lidar_required']):
             self.create_subscription(
-                LaserScan, '/scan_rear', self._rear_scan,
+                LaserScan, '/rear/scan', self._rear_scan,
                 qos_profile_sensor_data)
         self.tf_buffer = Buffer(node=self)
         self.tf_listener = TransformListener(self.tf_buffer, self)
         period = 1.0 / max(1.0, float(self.p['control_rate_hz']))
         self.create_timer(period, self._safe_control)
         self.get_logger().info(
-            f'Route follower has {len(self.points)} points; wheelbase=0.77 m, '
+            f'Route follower has {len(self.points)} points; wheelbase=0.73 m, '
             f'max steering=+/-{float(self.p["max_steering_deg"]):.1f} deg; '
             'vehicle output uses MCU discrete drive levels')
 
@@ -273,6 +306,9 @@ class RouteFollower(Node):
     def _reference_path(self, msg):
         if len(msg.poses) < 2:
             return
+        signature = self._path_message_signature(msg)
+        if signature == self.published_reference_signature:
+            return
         expected_frame = str(self.p['reference_path_frame'])
         if msg.header.frame_id != expected_frame:
             self.get_logger().error(
@@ -295,12 +331,48 @@ class RouteFollower(Node):
             points.append(Waypoint(
                 index, float(pose.position.x), float(pose.position.y), yaw,
                 1, float(self.p['route_drive_level'])))
-        self.points = tuple(points)
+        self.raw_points = tuple(points)
+        try:
+            self.points, self.reference_geometry_report = self._build_reference(
+                self.raw_points)
+        except ReferenceGeometryError as exc:
+            self._error('REFERENCE_GEOMETRY_INVALID', str(exc))
+            return
         self.segment = 0
         self.state = 'START_POSE_CHECK' if self.odom is not None else 'WAITING_FOR_ODOM'
         self.reason = ''
+        self._publish_reference()
         self.get_logger().info(
-            f'Accepted external reference path with {len(self.points)} poses')
+            f'Accepted and normalized external reference path with '
+            f'{len(self.points)} poses')
+
+    def _build_reference(self, points):
+        reference, report = curvature_safe_waypoints(
+            points, float(self.p['wheelbase_m']),
+            float(self.p['max_steering_deg']),
+            float(self.p['reference_output_interval_m']),
+            float(self.p['reference_validation_interval_m']),
+            float(self.p['reference_steering_reserve_deg']),
+            float(self.p['reference_max_waypoint_displacement_m']))
+        self.get_logger().info('REFERENCE_GEOMETRY ' + json.dumps({
+            'smoothing_strength': report.smoothing_strength,
+            'raw_waypoints': report.input_waypoint_count,
+            'reference_points': report.output_point_count,
+            'max_waypoint_displacement_m':
+                report.max_waypoint_displacement_m,
+            'rms_waypoint_displacement_m':
+                report.rms_waypoint_displacement_m,
+            'max_steering_deg': math.degrees(report.max_steering_rad),
+            'over_limit_sample_count': report.over_limit_sample_count,
+            'validation_interval_m': report.validation_interval_m,
+        }, sort_keys=True))
+        return reference, report
+
+    @staticmethod
+    def _path_message_signature(msg):
+        first, last = msg.poses[0].pose.position, msg.poses[-1].pose.position
+        return (len(msg.poses), round(first.x, 6), round(first.y, 6),
+                round(last.x, 6), round(last.y, 6))
 
     @staticmethod
     def _stamp_ns(stamp):
@@ -330,10 +402,12 @@ class RouteFollower(Node):
                           'REJOIN_ALIGNING'):
             if self.state in ('STOPPED_FOR_REPLAN', 'WAITING_FOR_AVOIDANCE_START'):
                 self._publish_stop()
+                self._maybe_ready_for_avoidance_start()
             return
         self.state, self.reason = 'STOPPED_FOR_REPLAN', 'REPLAN_REQUIRED'
         self.start_requested = False
         self._publish_stop()
+        self._maybe_ready_for_avoidance_start()
         self._publish_status()
         self.get_logger().warning(
             'STOPPED_FOR_REPLAN: exact-zero vehicle command latched; '
@@ -343,16 +417,42 @@ class RouteFollower(Node):
         return self.current_mode in {
             str(value).strip() for value in self.p['allowed_avoidance_modes']}
 
+    def _maybe_ready_for_avoidance_start(self):
+        """Latch path readiness after every independently ordered input."""
+        if self.state != 'STOPPED_FOR_REPLAN':
+            return False
+        if not self.avoidance_active or not self._mode_allowed():
+            return False
+        if self.planner_state != 'PATH_READY' or len(self.selected_points) < 2:
+            return False
+        if self.selected_path_receive_time is None:
+            return False
+        now = self.get_clock().now()
+        age = (now-self.selected_path_receive_time).nanoseconds/1e9
+        if not 0.0 <= age <= float(self.p['selected_path_timeout_s']):
+            return False
+        self.state, self.reason = 'WAITING_FOR_AVOIDANCE_START', 'PATH_READY'
+        self.avoidance_ready_since = now
+        self.avoidance_auto_start_failure_logged = False
+        self._publish_stop()
+        self.get_logger().info(
+            'WAITING_FOR_AVOIDANCE_START: selected path readiness latched')
+        return True
+
     def _mcu_mode(self, msg):
         self.current_mode = str(msg.data).strip()
         if not self._mode_allowed():
             self._reset_avoidance_authority('MCU_MODE_NOT_ALLOWED')
+        else:
+            self._maybe_ready_for_avoidance_start()
 
     def _active(self, msg):
         self.avoidance_active = bool(msg.data)
         self.last_active_receive_time = self.get_clock().now()
         if not self.avoidance_active:
             self._reset_avoidance_authority('AVOIDANCE_INACTIVE')
+        else:
+            self._maybe_ready_for_avoidance_start()
 
     def _active_authority_valid(self, now):
         if (not self._mode_allowed() or not self.avoidance_active or
@@ -398,6 +498,7 @@ class RouteFollower(Node):
                 self._error('PLANNER_SAFETY_STOP', self.planner_state)
             elif int(payload.get('runtime_tf_drop_count', 0)) > 0:
                 self._error('RUNTIME_TF_FAILURE', payload.get('last_tf_error', ''))
+        self._maybe_ready_for_avoidance_start()
 
     def _selected_path(self, msg):
         stamp_ns = self._stamp_ns(msg.header.stamp)
@@ -424,13 +525,7 @@ class RouteFollower(Node):
         self.selected_path_signature = signature
         self.selected_path_stamp_ns = stamp_ns
         self.selected_path_receive_time = self.get_clock().now()
-        if self.state == 'STOPPED_FOR_REPLAN':
-            self.state, self.reason = 'WAITING_FOR_AVOIDANCE_START', 'PATH_READY'
-            self.avoidance_ready_since = self.get_clock().now()
-            self.avoidance_auto_start_failure_logged = False
-            self._publish_stop()
-            self.get_logger().info(
-                'WAITING_FOR_AVOIDANCE_START: path_ready_hold_sec countdown started')
+        self._maybe_ready_for_avoidance_start()
 
     def _pose(self):
         pose = self.odom.pose.pose
@@ -924,6 +1019,9 @@ class RouteFollower(Node):
             self.control_source_pub.publish(String(data='STOP'))
 
     def _publish_source_pair(self, source, steering_deg):
+        # Planner/follower steering is positive-left.  The legacy /lidar_wheel
+        # contract is positive-right, so the SIMPLE bridge converts it back to
+        # the MCU's positive-left convention exactly once.
         wheel = int(round(-steering_deg))
         if source in ('LIDAR', 'REJOINING'):
             drive = float(self.p['avoidance_drive_level'])
@@ -931,7 +1029,9 @@ class RouteFollower(Node):
             self._publish_stop()
             return
         self.requested_drive_pub.publish(Float32(data=drive))
-        self.requested_wheel_pub.publish(Int32(data=max(-27, min(27, wheel))))
+        limit = int(math.floor(float(self.p['max_steering_deg'])))
+        self.requested_wheel_pub.publish(
+            Int32(data=max(-limit, min(limit, wheel))))
         self.control_source = source
         self.control_source_pub.publish(String(data=source))
 
@@ -953,6 +1053,7 @@ class RouteFollower(Node):
             pose.pose.orientation.z = math.sin(point.yaw/2.0)
             pose.pose.orientation.w = math.cos(point.yaw/2.0)
             path.poses.append(pose)
+        self.published_reference_signature = self._path_message_signature(path)
         self.reference_pub.publish(path)
         self._point_marker(self.goal_marker_pub, 'goal', 0, self.points[-1].x,
                            self.points[-1].y, (1.0, 0.0, 0.0), 0.24)
@@ -1082,6 +1183,19 @@ class RouteFollower(Node):
                    'avoidance_mean_cte_m': statistics.fmean(
                        self.avoidance_cte_samples)
                        if self.avoidance_cte_samples else 0.0,
+                   'reference_geometry': (None if
+                       self.reference_geometry_report is None else {
+                           'smoothing_strength':
+                               self.reference_geometry_report.smoothing_strength,
+                           'max_waypoint_displacement_m':
+                               self.reference_geometry_report.max_waypoint_displacement_m,
+                           'rms_waypoint_displacement_m':
+                               self.reference_geometry_report.rms_waypoint_displacement_m,
+                           'max_steering_deg': math.degrees(
+                               self.reference_geometry_report.max_steering_rad),
+                           'over_limit_sample_count':
+                               self.reference_geometry_report.over_limit_sample_count,
+                       }),
                    'completed_avoidances': self.completed_avoidances}
         if result is not None:
             payload.update({'nearest_index': result.nearest_index,

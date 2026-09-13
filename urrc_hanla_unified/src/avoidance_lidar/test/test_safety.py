@@ -56,10 +56,10 @@ def test_speed_increases_roi_and_physical_stopping_distance():
 
 
 def test_corridor_ignores_side_returns_but_follows_steering_arc():
-    gate = LidarSafetyGate(corridor_width_m=0.20, wheelbase_m=0.77,
+    gate = LidarSafetyGate(corridor_width_m=0.20, wheelbase_m=0.73,
                            stop_confirm_scans=1)
-    steering = 27.0
-    curvature = math.tan(math.radians(steering)) / 0.77
+    steering = 22.0
+    curvature = math.tan(math.radians(steering)) / 0.73
     progress = 1.0
     x = math.sin(curvature * progress) / curvature
     y = (1.0 - math.cos(curvature * progress)) / curvature
@@ -109,13 +109,13 @@ def test_emergency_distance_stops_on_first_scan():
 def test_filter_preserves_units_and_wheel():
     gate = LidarSafetyGate(stop_confirm_scans=1)
     gate.update_scan(Scan().set_range(0.0, 0.3))
-    assert gate.filter_command(2.0, -27) == (0.0, -27)
+    assert gate.filter_command(2.0, -22) == (0.0, -22)
 
 
-def test_final_steering_saturation_never_exceeds_27_degrees():
-    assert clamp_steering(80, 27) == 27
-    assert clamp_steering(-80, 27) == -27
-    assert clamp_steering(12, 25) == 12
+def test_final_steering_saturation_never_exceeds_22_degrees():
+    assert clamp_steering(80, 22) == 22
+    assert clamp_steering(-80, 22) == -22
+    assert clamp_steering(12, 22) == 12
 
 
 def test_safety_authority_requires_mode_five_active_fresh_heartbeat():

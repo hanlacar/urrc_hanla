@@ -3,9 +3,9 @@
 import math
 
 
-def clamp_steering(steering_deg, limit_deg=27):
+def clamp_steering(steering_deg, limit_deg=22):
     """Return an integer steering command within the MCU contract."""
-    limit = min(27, max(0, int(limit_deg)))
+    limit = min(22, max(0, int(limit_deg)))
     return max(-limit, min(limit, int(steering_deg)))
 
 
@@ -23,7 +23,7 @@ class LidarSafetyGate:
                  stop_confirm_scans=2, clear_confirm_scans=3,
                  scan_timeout_sec=0.5, stop_on_scan_timeout=True,
                  emergency_stop_distance_m=0.30,
-                 corridor_width_m=1.20, wheelbase_m=0.77,
+                 corridor_width_m=1.20, wheelbase_m=0.73,
                  roi_min_length_m=1.50, roi_max_length_m=5.0,
                  roi_time_horizon_sec=1.50, reaction_time_sec=0.30,
                  max_deceleration_mps2=1.0, ttc_enabled=True,

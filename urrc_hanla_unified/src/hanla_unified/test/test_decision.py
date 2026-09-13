@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from hanla_unified.decision import (
     Candidate, DecisionInput, decide, limit_rate, requires_emergency_brake,
 )
@@ -104,3 +106,26 @@ def test_section5_lidar_is_valid_only_during_active_avoidance():
 
 
     assert not requires_emergency_brake(decide(data(4, traffic_go=False)))
+
+
+def test_system_launch_preserves_single_final_simple_mcu_chain():
+    launch = (Path(__file__).parents[1] / "launch" /
+              "system.launch.py").read_text()
+    assert '"enable_mux": "false"' in launch
+    assert '"enable_mcu_simple_compat": "false"' in launch
+    assert '"input_drive_topic": "/cmd_drive"' in launch
+    assert '"input_wheel_topic": "/cmd_wheel"' in launch
+    assert '"input_stop_topic": "/cmd_stop"' in launch
+    assert '"drive_input_unit": "mps"' in launch
+    assert '"wheel_input_type": "float32"' in launch
+    assert '"publish_mode_5": False' in launch
+    assert '"avoidance_left_curb_inner_y_m", default_value="1.095"' in launch
+    assert '"avoidance_right_curb_inner_y_m", default_value="-1.095"' in launch
+    assert '"avoidance_replan_trigger_distance_m", default_value="2.0"' in launch
+
+
+def test_mission_decision_owns_integrated_mode_echo():
+    source = (Path(__file__).parents[1] / "hanla_unified" /
+              "mission_decision_node.py").read_text()
+    assert 'String, "/mcu/current_mode", 10' in source
+    assert 'String(data=str(self.section))' in source

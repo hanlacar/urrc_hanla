@@ -11,8 +11,11 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>rplidar_ros</exec_depend>
+  <exec_depend>rviz2</exec_depend>
   <exec_depend>lidar_motion_detector</exec_depend>
   <exec_depend>avoidance_lidar</exec_depend>
   <exec_depend>avoidance_planner</exec_depend>

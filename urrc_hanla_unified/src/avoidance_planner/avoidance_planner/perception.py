@@ -73,7 +73,19 @@ def preprocess_scan(ranges, angle_min, angle_increment, scan_min, scan_max,
                     roi_x_min, roi_x_max, roi_half_width,
                     self_x_min, self_x_max, self_y_half_width):
     """Remove invalid, out-of-range, self-reflection, and out-of-ROI samples."""
-    points = []
+    points, _rejected = partition_scan_points(
+        ranges, angle_min, angle_increment, scan_min, scan_max,
+        roi_x_min, roi_x_max, roi_half_width,
+        self_x_min, self_x_max, self_y_half_width)
+    return points
+
+
+def partition_scan_points(ranges, angle_min, angle_increment,
+                          scan_min, scan_max, roi_x_min, roi_x_max,
+                          roi_half_width, self_x_min, self_x_max,
+                          self_y_half_width):
+    """Return planner ROI points and valid non-self points rejected by it."""
+    points, rejected = [], []
     for index, raw in enumerate(ranges):
         distance = float(raw)
         if not math.isfinite(distance) or distance < scan_min or distance > scan_max:
@@ -84,7 +96,9 @@ def preprocess_scan(ranges, angle_min, angle_increment, scan_min, scan_max,
             continue
         if roi_x_min <= x <= roi_x_max and abs(y) <= roi_half_width:
             points.append(ScanPoint(index, x, y, distance))
-    return points
+        else:
+            rejected.append(ScanPoint(index, x, y, distance))
+    return points, rejected
 
 
 def adaptive_gap(distance, near_gap, far_gap, far_distance):

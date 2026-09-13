@@ -95,7 +95,7 @@ class CommandMux(Node):
             'mode_timeout_sec': 0.50,
             'stop_timeout_sec': 0.50,
             'publish_rate_hz': 20.0,
-            'wheel_limit_deg': 27,
+            'wheel_limit_deg': 22,
             'check_publisher_conflicts': True,
             'conflict_check_period_sec': 1.0,
         }
@@ -115,8 +115,8 @@ class CommandMux(Node):
             raise ValueError('all timeouts must be > 0')
         if publish_rate < 4.0:
             raise ValueError('publish_rate_hz must be >= 4 Hz')
-        if self.wheel_limit <= 0:
-            raise ValueError('wheel_limit_deg must be > 0')
+        if not 0 < self.wheel_limit <= 22:
+            raise ValueError('wheel_limit_deg must be in (0, 22]')
 
         self.sources: Dict[str, SourceState] = {
             'parking': SourceState(),

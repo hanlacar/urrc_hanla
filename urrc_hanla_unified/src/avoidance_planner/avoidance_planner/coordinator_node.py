@@ -32,10 +32,12 @@ from .collision_evaluator import (
     track_box)
 from .geometry import Pose2
 from .local_planner import (interpolate_route, plan_candidates, project_route,
-                            route_lengths)
+                            route_lengths, route_segment_steering,
+                            route_yaw_tangent_errors)
 from .perception import (
     DYNAMIC_OBSTACLE, STATIC_OBSTACLE, Detection, LineFeature, TrackManager,
-    ScanPoint, cluster_groups, split_walls_and_objects, preprocess_scan)
+    ScanPoint, cluster_groups, partition_scan_points, preprocess_scan,
+    split_walls_and_objects)
 
 
 PLANNER_STATES = (
@@ -84,8 +86,8 @@ class AvoidanceCoordinator(Node):
             'wall_min_length_m': 1.50, 'wall_max_residual_m': 0.05,
             'wall_parallel_tolerance_deg': 15.0,
             'vehicle_length_m': 1.30, 'vehicle_width_m': 0.78,
-            'vehicle_center_x_offset_m': 0.0, 'wheelbase_m': 0.77,
-            'max_steering_deg': 25.0,
+            'vehicle_center_x_offset_m': 0.0, 'wheelbase_m': 0.73,
+            'max_steering_deg': 22.0,
             'obstacle_safety_lateral_m': 0.20,
             'obstacle_safety_longitudinal_m': 0.15,
             'minimum_obstacle_depth_m': 0.65,
@@ -95,7 +97,7 @@ class AvoidanceCoordinator(Node):
             'right_curb_inner_y_m': -1.095,
             'obstacle_monitor_distance_m': 5.0,
             'replan_trigger_distance_m': 2.0,
-            'front_lidar_x_offset_m': 0.65,
+            'front_lidar_x_offset_m': 0.73,
             'emergency_stop_distance_m': 0.5,
             'stopped_linear_speed_mps': 0.03,
             'stopped_angular_speed_rps': 0.03,
@@ -117,6 +119,8 @@ class AvoidanceCoordinator(Node):
             'collision_confirmation_frames': 3,
             'odom_timeout_sec': 0.50,
             'reference_path_timeout_sec': 0.0,
+            'debug_visualization': False,
+            'publish_rejected_points': False,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -184,6 +188,26 @@ class AvoidanceCoordinator(Node):
             String, '/avoidance/planner_diagnostics', transient)
         self.obstacle_status_pub = self.create_publisher(
             MarkerArray, '/avoidance/obstacle_status', transient)
+        self.debug_visualization = bool(self.p['debug_visualization'])
+        self.debug_roi_pub = None
+        self.debug_roi_points_pub = None
+        self.debug_rejected_points_pub = None
+        self.debug_obstacles_pub = None
+        self.debug_selected_obstacle_pub = None
+        self.debug_collision_pub = None
+        if self.debug_visualization:
+            self.debug_roi_pub = self.create_publisher(
+                Marker, '/avoidance/debug/roi', transient)
+            self.debug_roi_points_pub = self.create_publisher(
+                Marker, '/avoidance/debug/roi_points', transient)
+            self.debug_rejected_points_pub = self.create_publisher(
+                Marker, '/avoidance/debug/rejected_points', transient)
+            self.debug_obstacles_pub = self.create_publisher(
+                MarkerArray, '/avoidance/debug/obstacles', transient)
+            self.debug_selected_obstacle_pub = self.create_publisher(
+                MarkerArray, '/avoidance/debug/selected_obstacle', transient)
+            self.debug_collision_pub = self.create_publisher(
+                MarkerArray, '/avoidance/debug/collision', transient)
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -225,6 +249,7 @@ class AvoidanceCoordinator(Node):
         self.path_relevant_track_ids = set()
         self.passed_obstacle_s = []
         self.last_front_scan_time = None
+        self.last_front_scan_processed_time = None
         self.last_rear_scan_time = None
         self.last_front_scan_stamp_ns = None
         self.last_rear_scan_stamp_ns = None
@@ -243,6 +268,7 @@ class AvoidanceCoordinator(Node):
         self.planning_started_wall = None
         self.tf_failures = 0
         self.scan_drops = 0
+        self.superseded_scan_drops = 0
         self.scan_count = 0
         self.performance = {
             'scan_processing_ms': 0.0, 'clustering_ms': 0.0,
@@ -251,6 +277,9 @@ class AvoidanceCoordinator(Node):
             'total_planning_ms': 0.0, 'cpu_percent': 0.0,
             'effective_scan_hz': 0.0}
         self.last_plan_summary = {}
+        self.last_collision_debug = None
+        self.debug_perception_valid = False
+        self.route_geometry_summary = {}
         self.last_track_decisions = []
         self.cluster_diagnostics = []
         self.track_decision_states = {}
@@ -286,7 +315,7 @@ class AvoidanceCoordinator(Node):
         self.replan_pub.publish(Bool(data=False))
         self._publish_active()
         self.replan_threshold_pub.publish(
-            Float32(data=float(self.p['replan_trigger_distance_m'])))
+            Float32(data=self._replan_trigger_distance()))
         self._publish_status()
         self.get_logger().info(
             'Avoidance planner waiting for exact-timestamp front LiDAR TF; '
@@ -295,8 +324,13 @@ class AvoidanceCoordinator(Node):
     def _validate_parameters(self):
         if float(self.p['wheelbase_m']) <= 0.0:
             raise ValueError('wheelbase_m must be positive')
-        if not 0.0 < float(self.p['max_steering_deg']) <= 25.0:
-            raise ValueError('max_steering_deg must be in (0, 25]')
+        if (float(self.p['planning_roi_x_min_m']) >=
+                float(self.p['planning_roi_x_max_m'])):
+            raise ValueError('planning ROI x bounds are inverted')
+        if float(self.p['planning_roi_half_width_m']) <= 0.0:
+            raise ValueError('planning_roi_half_width_m must be positive')
+        if not 0.0 < float(self.p['max_steering_deg']) <= 22.0:
+            raise ValueError('max_steering_deg must be in (0, 22]')
         if float(self.p['left_curb_inner_y_m']) <= float(self.p['right_curb_inner_y_m']):
             raise ValueError('curb boundaries are inverted')
         if int(self.p.get('collision_confirmation_frames', 3)) < 1:
@@ -367,11 +401,39 @@ class AvoidanceCoordinator(Node):
         if len(route) >= 2:
             self.route = tuple(route)
             self.reference_receive_time = self.get_clock().now()
+            steering = route_segment_steering(
+                self.route, float(self.p['wheelbase_m']))
+            limit = math.radians(float(self.p['max_steering_deg']))
+            violations = [item for item in steering
+                          if abs(item[4]) > limit+1.0e-9]
+            tangent_errors = route_yaw_tangent_errors(self.route)
+            worst_tangent = max(
+                tangent_errors, key=lambda item: abs(item[2]))
+            worst_steering = max(
+                steering, key=lambda item: abs(item[4]))
+            self.route_geometry_summary = {
+                'segment_count': len(steering),
+                'steering_limit_deg': float(self.p['max_steering_deg']),
+                'segments_over_limit': len(violations),
+                'over_limit_indices': [item[0] for item in violations],
+                'max_segment_steering_deg': math.degrees(worst_steering[4]),
+                'max_segment_steering_index': worst_steering[0],
+                'max_yaw_tangent_error_deg': math.degrees(worst_tangent[2]),
+                'max_yaw_tangent_error_index': worst_tangent[0],
+            }
+            if violations:
+                self.get_logger().error(
+                    'REFERENCE_ROUTE_STEERING_LIMIT ' +
+                    json.dumps(self.route_geometry_summary, sort_keys=True))
 
     def _mode_allowed(self):
         allowed = {str(value).strip() for value in
                    self.p['allowed_avoidance_modes']}
         return self.current_mode in allowed
+
+    def _replan_trigger_distance(self):
+        """Return the live ROS parameter used by collision and debug paths."""
+        return float(self.get_parameter('replan_trigger_distance_m').value)
 
     def _mcu_mode(self, msg):
         previous_allowed = self._mode_allowed()
@@ -395,6 +457,7 @@ class AvoidanceCoordinator(Node):
         self.debounce = ReplanDebounce(
             int(self.p['collision_confirmation_frames']))
         self.selected_track = None
+        self.last_collision_debug = None
         self.avoidance_started = False
         self.stopped_since = None
         self.last_collision_evaluation_scan_count = self.scan_count
@@ -533,6 +596,8 @@ class AvoidanceCoordinator(Node):
             self.past_extrapolation_count += 1
         else:
             self.missing_frame_count += 1
+        if getattr(self, 'debug_visualization', False):
+            self._clear_debug_perception()
         if getattr(self, 'active', False):
             self.operational_state = 'SAFE_STOP'
             self._set_state('ERROR', f'LiDAR TF failure: {detail}')
@@ -543,25 +608,44 @@ class AvoidanceCoordinator(Node):
         remaining = deque()
         timeout = float(self.p['tf_lookup_timeout_sec'])
         now = time.perf_counter()
+        streams = {True: [], False: []}
         while self.pending_scans:
-            scan, is_front, received = self.pending_scans.popleft()
-            transform, category, detail = self._lookup_transform(scan)
-            if transform is not None:
-                self.tf_ready_frames.add(scan.header.frame_id)
-                if is_front:
-                    self.front_tf_ready = True
-                    self._process_scan(scan, transform)
-                else:
-                    self.rear_tf_ready = True
-                self.tf_ready = (
-                    self.front_tf_ready and
-                    (not bool(self.p['rear_lidar_required']) or
-                     self.rear_tf_ready))
+            item = self.pending_scans.popleft()
+            streams[item[1]].append(item)
+        for is_front, entries in streams.items():
+            if not entries:
                 continue
-            if now-received < timeout:
-                remaining.append((scan, is_front, received))
-            else:
-                self._record_tf_drop(detail, category)
+            deferred = None
+            newest_failure = None
+            processed = False
+            # Prefer the latest transformable scan.  Older scans are useful
+            # only when TF for the newest scan has not arrived yet.
+            for scan, _is_front, received in reversed(entries):
+                transform, category, detail = self._lookup_transform(scan)
+                if transform is not None:
+                    self.tf_ready_frames.add(scan.header.frame_id)
+                    if is_front:
+                        self.front_tf_ready = True
+                        self._process_scan(scan, transform)
+                    else:
+                        self.rear_tf_ready = True
+                    processed = True
+                    break
+                if newest_failure is None:
+                    newest_failure = (detail, category)
+                if deferred is None and now-received < timeout:
+                    deferred = (scan, is_front, received)
+            discarded = len(entries)-int(processed)-int(deferred is not None)
+            if discarded > 0:
+                self.scan_drops += discarded
+                self.superseded_scan_drops += discarded
+            if deferred is not None:
+                remaining.append(deferred)
+            elif not processed and newest_failure is not None:
+                self._record_tf_drop(*newest_failure)
+        self.tf_ready = (
+            self.front_tf_ready and
+            (not bool(self.p['rear_lidar_required']) or self.rear_tf_ready))
         self.pending_scans = remaining
 
     def _transform_points(self, points, transform):
@@ -575,6 +659,45 @@ class AvoidanceCoordinator(Node):
             translation.y+s*point.x+c*point.y,
             point.distance) for point in points)
 
+    def _publish_debug_scan(self, stamp, transform, points, rejected):
+        if not self.debug_visualization:
+            return
+        self.debug_perception_valid = True
+        x_min = float(self.p['planning_roi_x_min_m'])
+        x_max = float(self.p['planning_roi_x_max_m'])
+        half_width = float(self.p['planning_roi_half_width_m'])
+        raw_corners = tuple(
+            ScanPoint(index, x, y, math.hypot(x, y))
+            for index, (x, y) in enumerate((
+                (x_min, -half_width), (x_max, -half_width),
+                (x_max, half_width), (x_min, half_width),
+                (x_min, -half_width))))
+        corners = self._transform_points(raw_corners, transform)
+        roi = self._marker('debug_planner_roi', 0, Marker.LINE_STRIP, stamp)
+        roi.points = [Point(x=point.x, y=point.y, z=0.04)
+                      for point in corners]
+        roi.scale.x = 0.045
+        roi.color.r, roi.color.g, roi.color.a = 1.0, 0.75, 1.0
+        self.debug_roi_pub.publish(roi)
+
+        inside = self._marker('debug_roi_points', 0, Marker.POINTS, stamp)
+        inside.points = [Point(x=point.x, y=point.y, z=0.06)
+                         for point in points]
+        inside.scale.x = inside.scale.y = 0.055
+        inside.color.g, inside.color.b, inside.color.a = 1.0, 0.35, 0.95
+        self.debug_roi_points_pub.publish(inside)
+
+        outside = self._marker(
+            'debug_rejected_points', 0, Marker.POINTS, stamp)
+        if bool(self.p['publish_rejected_points']):
+            outside.points = [Point(x=point.x, y=point.y, z=0.02)
+                              for point in rejected]
+            outside.scale.x = outside.scale.y = 0.035
+            outside.color.r, outside.color.a = 1.0, 0.45
+        else:
+            outside.action = Marker.DELETE
+        self.debug_rejected_points_pub.publish(outside)
+
     def _process_scan(self, scan, transform):
         started = time.perf_counter()
         stamp_seconds = Time.from_msg(scan.header.stamp).nanoseconds/1e9
@@ -585,7 +708,7 @@ class AvoidanceCoordinator(Node):
         self.last_scan_wall = started
         self.last_scan_stamp = stamp_seconds
         transform_started = time.perf_counter()
-        points = preprocess_scan(
+        scan_filter_args = (
             scan.ranges, scan.angle_min, scan.angle_increment,
             max(scan.range_min, 0.12), min(scan.range_max, 12.0),
             float(self.p['planning_roi_x_min_m']),
@@ -593,7 +716,14 @@ class AvoidanceCoordinator(Node):
             float(self.p['planning_roi_half_width_m']),
             float(self.p['self_x_min_m']), float(self.p['self_x_max_m']),
             float(self.p['self_y_half_width_m']))
+        if self.debug_visualization:
+            points, rejected = partition_scan_points(*scan_filter_args)
+            rejected = self._transform_points(rejected, transform)
+        else:
+            points = preprocess_scan(*scan_filter_args)
+            rejected = ()
         points = self._transform_points(points, transform)
+        self._publish_debug_scan(scan.header.stamp, transform, points, rejected)
         self.performance['tf_transform_ms'] = (
             time.perf_counter()-transform_started)*1000.0
         cluster_started = time.perf_counter()
@@ -677,6 +807,10 @@ class AvoidanceCoordinator(Node):
             self.tracks = updated_tracks
         self.performance['track_update_ms'] = (time.perf_counter()-track_started)*1000.0
         self.performance['scan_processing_ms'] = (time.perf_counter()-started)*1000.0
+        # A long but successful callback is fresh sensor activity.  Recording
+        # completion prevents the callback from manufacturing its own timeout
+        # before queued subscription callbacks get another executor turn.
+        self.last_front_scan_processed_time = self.get_clock().now()
         self.scan_count += 1
         self._publish_perception(scan.header.stamp)
 
@@ -764,6 +898,7 @@ class AvoidanceCoordinator(Node):
         self.last_tick_time = now
         self.odom_receive_time = None
         self.last_front_scan_time = None
+        self.last_front_scan_processed_time = None
         self.last_rear_scan_time = None
         self.stopped_since = None
         self.pending_scans.clear()
@@ -772,6 +907,8 @@ class AvoidanceCoordinator(Node):
         self.rear_tf_ready = False
         self.tf_ready = False
         self.last_scan_stamp = None
+        if getattr(self, 'debug_visualization', False):
+            self._clear_debug_perception()
         self.replan_pub.publish(Bool(data=True))
         self.get_logger().error(
             f'TIME_RESET_STOP: {detail}; '
@@ -784,6 +921,29 @@ class AvoidanceCoordinator(Node):
                 self.odom_receive_time is not None and
                 self.last_front_scan_time is not None and rear_ready and
                 self.tf_ready)
+
+    def _consume_collision_frame(self, risks):
+        """Select and debounce at most one collision for one front frame.
+
+        ``risks`` contains the completed all-track evaluation for the current
+        successfully processed front scan.  Selection retains the existing
+        nearest collision-path-distance priority.  Updating the consumed
+        scan counter after the single debounce call makes duplicate planner
+        ticks idempotent and keeps tracker iteration order irrelevant.
+        """
+        trigger_distance = self._replan_trigger_distance()
+        candidates = tuple(
+            item for item in risks
+            if risk_within_activation_distance(item[2], trigger_distance))
+        selected = min(candidates, key=lambda item: item[0], default=None)
+        if self.scan_count == self.last_collision_evaluation_scan_count:
+            return selected, self.debounce.latched, False
+        if selected is None:
+            confirmed = self.debounce.update(False)
+        else:
+            confirmed = self.debounce.update(True, selected[1].track_id)
+        self.last_collision_evaluation_scan_count = self.scan_count
+        return selected, confirmed, True
 
     def _tick(self):
         now = self.get_clock().now()
@@ -800,10 +960,13 @@ class AvoidanceCoordinator(Node):
                 self._publish_status()
                 return
             self.last_tick_time = now
-        self._drain_scan_queue()
-        self._update_cpu_usage()
+        # Check input freshness BEFORE potentially expensive scan processing.
+        # Otherwise _drain_scan_queue() can block this executor long enough
+        # to create a false front-scan timeout by itself.
         self._publish_stop_contract()
         self._watchdog()
+        self._drain_scan_queue()
+        self._update_cpu_usage()
         if not self._mode_allowed():
             if self.debounce.count or self.active:
                 self._reset_avoidance('MCU_MODE_NOT_ALLOWED')
@@ -951,74 +1114,68 @@ class AvoidanceCoordinator(Node):
                 self.track_decision_states[track_id] = signature
                 self.get_logger().info(
                     'TRACK_DECISION ' + json.dumps(decision, sort_keys=True))
+        selected_collision, confirmed, new_lidar_frame = (
+            self._consume_collision_frame(risks))
+        if selected_collision is not None:
+            self.last_collision_debug = (
+                selected_collision[1], selected_collision[2])
+        elif new_lidar_frame:
+            self.last_collision_debug = None
         if risks:
-            distance, track, risk = min(risks, key=lambda item: item[0])
+            distance, _metric_track, metric_risk = min(
+                risks, key=lambda item: item[0])
             self.nearest_distance_pub.publish(Float32(data=float(distance)))
             self.lidar_surface_distance_pub.publish(
-                Float32(data=float(risk.lidar_surface_distance)))
+                Float32(data=float(metric_risk.lidar_surface_distance)))
             self.vehicle_front_distance_pub.publish(
-                Float32(data=float(risk.vehicle_front_surface_distance)))
+                Float32(data=float(
+                    metric_risk.vehicle_front_surface_distance)))
             self.obstacle_center_distance_pub.publish(
-                Float32(data=float(risk.obstacle_center_distance)))
+                Float32(data=float(metric_risk.obstacle_center_distance)))
             self.collision_point_distance_pub.publish(
-                Float32(data=float(risk.collision_point_distance)))
+                Float32(data=float(metric_risk.collision_point_distance)))
             self.collision_path_distance_pub.publish(
-                Float32(data=float(risk.collision_path_distance)))
-            new_lidar_frame = (
-                self.scan_count != self.last_collision_evaluation_scan_count)
-            if new_lidar_frame:
-                self.last_collision_evaluation_scan_count = self.scan_count
-            trigger = risk_within_activation_distance(
-                risk, float(self.p['replan_trigger_distance_m']))
-            if trigger:
-                self.selected_track = track
-                confirmed = (self.debounce.update(True, track.track_id)
-                             if new_lidar_frame else self.debounce.latched)
-                if confirmed:
-                    self._set_active(True)
-                    current = self._current_pose()
-                    twist = self.odom.twist.twist
-                    self.get_logger().info('STOP_TRIGGER ' + json.dumps({
-                        'track_id': track.track_id,
-                        'lidar_surface_distance_m': risk.lidar_surface_distance,
-                        'vehicle_front_surface_distance_m':
-                            risk.vehicle_front_surface_distance,
-                        'collision_path_distance_m': risk.collision_path_distance,
-                        'confirmation_frames': self.debounce.count,
-                        'vehicle_x': current.x, 'vehicle_y': current.y,
-                        'vehicle_yaw': current.yaw,
-                        'obstacle_x': track.x, 'obstacle_y': track.y,
-                        'csv_index': self.route_nearest_index,
-                        'odom_linear_speed_mps': twist.linear.x,
-                        'odom_angular_speed_rps': twist.angular.z,
-                        'stamp_ns': self.get_clock().now().nanoseconds,
-                    }, sort_keys=True))
-                    self.replan_pub.publish(Bool(data=True))
-                    if track.state == DYNAMIC_OBSTACLE:
-                        self.operational_state = 'SAFE_STOP'
-                        self._set_state(
-                            'DYNAMIC_OBSTACLE_STOP',
-                            'confirmed dynamic obstacle intersects reference path')
-                    else:
-                        self.operational_state = 'STOPPING'
-                        self._set_state('OBSTACLE_CONFIRMED', f'track={track.track_id}')
-                        self._set_state('REPLAN_REQUIRED', f'track={track.track_id}')
-                        self._set_state('STOPPING', 'waiting for odom-confirmed stop')
-                elif new_lidar_frame:
-                    self._set_state('OBSTACLE_CANDIDATE', f'track={track.track_id}')
-            elif new_lidar_frame and not self.active:
-                self.debounce.update(False)
-                self.selected_track = None
-                self._set_state('FOLLOWING_CSV', 'collision outside trigger distance')
-        elif not self.active:
-            new_lidar_frame = (
-                self.scan_count != self.last_collision_evaluation_scan_count)
-            if new_lidar_frame:
-                self.last_collision_evaluation_scan_count = self.scan_count
-                self.debounce.update(False)
-                self.selected_track = None
-                if self.state == 'OBSTACLE_CANDIDATE':
-                    self._set_state('FOLLOWING_CSV', '')
+                Float32(data=float(metric_risk.collision_path_distance)))
+        if selected_collision is not None:
+            _distance, track, risk = selected_collision
+            self.selected_track = track
+            if confirmed:
+                self._set_active(True)
+                current = self._current_pose()
+                twist = self.odom.twist.twist
+                self.get_logger().info('STOP_TRIGGER ' + json.dumps({
+                    'track_id': track.track_id,
+                    'lidar_surface_distance_m': risk.lidar_surface_distance,
+                    'vehicle_front_surface_distance_m':
+                        risk.vehicle_front_surface_distance,
+                    'collision_path_distance_m': risk.collision_path_distance,
+                    'confirmation_frames': self.debounce.count,
+                    'vehicle_x': current.x, 'vehicle_y': current.y,
+                    'vehicle_yaw': current.yaw,
+                    'obstacle_x': track.x, 'obstacle_y': track.y,
+                    'csv_index': self.route_nearest_index,
+                    'odom_linear_speed_mps': twist.linear.x,
+                    'odom_angular_speed_rps': twist.angular.z,
+                    'stamp_ns': self.get_clock().now().nanoseconds,
+                }, sort_keys=True))
+                self.replan_pub.publish(Bool(data=True))
+                if track.state == DYNAMIC_OBSTACLE:
+                    self.operational_state = 'SAFE_STOP'
+                    self._set_state(
+                        'DYNAMIC_OBSTACLE_STOP',
+                        'confirmed dynamic obstacle intersects reference path')
+                else:
+                    self.operational_state = 'STOPPING'
+                    self._set_state('OBSTACLE_CONFIRMED', f'track={track.track_id}')
+                    self._set_state('REPLAN_REQUIRED', f'track={track.track_id}')
+                    self._set_state('STOPPING', 'waiting for odom-confirmed stop')
+            elif new_lidar_frame:
+                self._set_state('OBSTACLE_CANDIDATE', f'track={track.track_id}')
+        elif new_lidar_frame and not self.active:
+            self.selected_track = None
+            reason = ('collision outside trigger distance' if risks else '')
+            if risks or self.state == 'OBSTACLE_CANDIDATE':
+                self._set_state('FOLLOWING_CSV', reason)
         self._publish_status()
 
     def _advance_planning(self):
@@ -1110,7 +1267,10 @@ class AvoidanceCoordinator(Node):
             self._publish_plan(result, elapsed_ms)
             if result.selected is None:
                 self.operational_state = 'SAFE_STOP'
-                self._set_state('PATH_INFEASIBLE', 'no collision-free <=25 deg candidate')
+                limit = float(self.p['max_steering_deg'])
+                self._set_state(
+                    'PATH_INFEASIBLE',
+                    f'no collision-free <={limit:.1f} deg candidate')
             else:
                 self.operational_state = 'PLANNING'
                 self._set_state('PATH_READY', f'candidate={result.selected.candidate_id}')
@@ -1156,7 +1316,16 @@ class AvoidanceCoordinator(Node):
             if not self.active:
                 self.debounce.update(False)
             return
-        age = (now-self.last_front_scan_time).nanoseconds/1e9
+        processed_age = (
+            math.inf if self.last_front_scan_processed_time is None else
+            (now-self.last_front_scan_processed_time).nanoseconds/1e9)
+        if (processed_age > float(self.p['scan_timeout_sec']) and
+                getattr(self, 'debug_visualization', False)):
+            self._clear_debug_perception()
+        freshness = [self.last_front_scan_time]
+        if self.last_front_scan_processed_time is not None:
+            freshness.append(self.last_front_scan_processed_time)
+        age = min((now-stamp).nanoseconds/1e9 for stamp in freshness)
         if age > float(self.p['scan_timeout_sec']) and self.state not in (
                 'PATH_READY', 'PATH_INFEASIBLE', 'DYNAMIC_OBSTACLE_STOP'):
             self.scan_drops += 1
@@ -1239,6 +1408,164 @@ class AvoidanceCoordinator(Node):
         marker = Marker(); marker.action = Marker.DELETEALL
         return MarkerArray(markers=[marker])
 
+    def _clear_debug_perception(self):
+        if not self.debug_visualization:
+            return
+        self.debug_perception_valid = False
+        for publisher, namespace in (
+                (self.debug_roi_pub, 'debug_planner_roi'),
+                (self.debug_roi_points_pub, 'debug_roi_points'),
+                (self.debug_rejected_points_pub, 'debug_rejected_points')):
+            marker = self._marker(namespace, 0, Marker.POINTS)
+            marker.action = Marker.DELETE
+            publisher.publish(marker)
+        clear = self._clear_array()
+        self.debug_obstacles_pub.publish(clear)
+        self.debug_selected_obstacle_pub.publish(self._clear_array())
+        self.debug_collision_pub.publish(self._clear_array())
+        self.last_collision_debug = None
+
+    def _publish_debug_obstacles(self, stamp=None):
+        if not self.debug_visualization:
+            return
+        if not self.debug_perception_valid:
+            self.debug_obstacles_pub.publish(self._clear_array())
+            self.debug_selected_obstacle_pub.publish(self._clear_array())
+            return
+        decisions = {
+            item['track_id']: item for item in self.last_track_decisions}
+        markers = self._clear_array()
+        active_track_ids = set()
+        for track in self.tracks:
+            active_track_ids.add(track.track_id)
+            box = self._marker(
+                'debug_obstacle_box', track.track_id, Marker.CUBE, stamp)
+            box.pose.position.x = track.x
+            box.pose.position.y = track.y
+            box.pose.position.z = 0.10
+            depth = max(0.02, track.max_x-track.min_x)
+            width = max(0.02, track.max_y-track.min_y)
+            box.scale.x, box.scale.y, box.scale.z = depth, width, 0.20
+            confirmed = track.state in (STATIC_OBSTACLE, DYNAMIC_OBSTACLE)
+            if track.state == STATIC_OBSTACLE:
+                box.color.r, box.color.g, box.color.a = 1.0, 0.25, 0.75
+            elif track.state == DYNAMIC_OBSTACLE:
+                box.color.r, box.color.g, box.color.a = 1.0, 0.75, 0.80
+            else:
+                box.color.r, box.color.b, box.color.a = 0.65, 1.0, 0.55
+            markers.markers.append(box)
+
+            decision = decisions.get(track.track_id, {})
+            label = self._marker(
+                'debug_obstacle_text', track.track_id,
+                Marker.TEXT_VIEW_FACING, stamp)
+            label.pose.position.x = track.x
+            label.pose.position.y = track.y
+            label.pose.position.z = 0.55
+            label.scale.z = 0.14
+            label.color.r = label.color.g = label.color.b = label.color.a = 1.0
+            details = [
+                f'track={track.track_id} {track.state}',
+                f'confirmed={str(confirmed).lower()} hits={track.hits}',
+                f'width={width:.2f}m depth={depth:.2f}m',
+            ]
+            if 'lidar_surface_distance_m' in decision:
+                details.append(
+                    f'surface={decision["lidar_surface_distance_m"]:.2f}m')
+            if 's' in decision:
+                details.append(f's={decision["s"]:.2f}m')
+            label.text = '\n'.join(details)
+            markers.markers.append(label)
+        self.debug_obstacles_pub.publish(markers)
+
+        selected = self._clear_array()
+        track = self.selected_track
+        if track is not None and track.track_id in active_track_ids:
+            highlight = self._marker(
+                'debug_selected_obstacle', track.track_id,
+                Marker.CUBE, stamp)
+            highlight.pose.position.x = track.x
+            highlight.pose.position.y = track.y
+            highlight.pose.position.z = 0.13
+            highlight.scale.x = max(0.12, track.max_x-track.min_x+0.12)
+            highlight.scale.y = max(0.12, track.max_y-track.min_y+0.12)
+            highlight.scale.z = 0.26
+            highlight.color.r = highlight.color.g = 1.0
+            highlight.color.a = 0.50
+            selected.markers.append(highlight)
+        self.debug_selected_obstacle_pub.publish(selected)
+
+    def _publish_debug_collision(self, stamp=None):
+        if not self.debug_visualization:
+            return
+        markers = self._clear_array()
+        if (not self.debug_perception_valid or
+                self.last_collision_debug is None or len(self.route) < 2):
+            self.debug_collision_pub.publish(markers)
+            return
+        track, risk = self.last_collision_debug
+        index = risk.collision_path_index
+        if index < 0 or index >= len(self.route):
+            self.debug_collision_pub.publish(markers)
+            return
+        collision_pose = self.route[index]
+        point = self._marker(
+            'debug_collision_point', 0, Marker.SPHERE, stamp)
+        point.pose.position.x = collision_pose.x
+        point.pose.position.y = collision_pose.y
+        point.pose.position.z = 0.18
+        point.scale.x = point.scale.y = point.scale.z = 0.24
+        point.color.r, point.color.a = 1.0, 1.0
+        markers.markers.append(point)
+
+        projected = self._marker(
+            'debug_collision_projection', 1, Marker.LINE_LIST, stamp)
+        projected.points = [Point(x=track.x, y=track.y, z=0.10),
+                            Point(x=collision_pose.x, y=collision_pose.y,
+                                  z=0.10)]
+        projected.scale.x = 0.04
+        projected.color.r, projected.color.b, projected.color.a = 1.0, 1.0, 0.9
+        markers.markers.append(projected)
+
+        threshold = self._replan_trigger_distance()
+        trigger = self._marker(
+            'debug_replan_trigger', 2, Marker.LINE_STRIP, stamp)
+        trigger.scale.x = 0.07
+        trigger.color.r, trigger.color.g, trigger.color.a = 1.0, 0.8, 0.9
+        start = max(0, min(risk.nearest_path_index, len(self.route)-1))
+        travelled = 0.0
+        trigger.points.append(Point(
+            x=self.route[start].x, y=self.route[start].y, z=0.08))
+        for previous, current in zip(self.route[start:], self.route[start+1:]):
+            segment = math.hypot(
+                current.x-previous.x, current.y-previous.y)
+            remaining = threshold-travelled
+            if segment > remaining:
+                ratio = max(0.0, remaining)/max(segment, 1.0e-9)
+                trigger.points.append(Point(
+                    x=previous.x+ratio*(current.x-previous.x),
+                    y=previous.y+ratio*(current.y-previous.y), z=0.08))
+                break
+            travelled += segment
+            trigger.points.append(Point(x=current.x, y=current.y, z=0.08))
+            if travelled >= threshold:
+                break
+        markers.markers.append(trigger)
+
+        label = self._marker(
+            'debug_collision_text', 3, Marker.TEXT_VIEW_FACING, stamp)
+        label.pose.position.x = collision_pose.x
+        label.pose.position.y = collision_pose.y
+        label.pose.position.z = 0.65
+        label.scale.z = 0.16
+        label.color.r = label.color.g = label.color.b = label.color.a = 1.0
+        label.text = (
+            f'track={track.track_id}\n'
+            f'collision_s={risk.collision_path_distance:.2f}m\n'
+            f'trigger={threshold:.2f}m')
+        markers.markers.append(label)
+        self.debug_collision_pub.publish(markers)
+
     def _publish_perception(self, stamp):
         static_markers, dynamic_markers = self._clear_array(), self._clear_array()
         for track in self.tracks:
@@ -1292,18 +1619,49 @@ class AvoidanceCoordinator(Node):
         valid_count = 0
         rejection_counts = {}
         for candidate in result.candidates:
-            marker = self._marker('candidate_paths', candidate.candidate_id, Marker.LINE_STRIP)
-            marker.points = [Point(x=pose.x, y=pose.y, z=0.04) for pose in candidate.path]
-            marker.scale.x = 0.035
             if candidate.valid:
                 valid_count += 1
-                marker.color.r, marker.color.g, marker.color.a = 1.0, 0.85, 0.55
             else:
                 rejection_counts[candidate.reason] = (
                     rejection_counts.get(candidate.reason, 0)+1)
-                marker.color.r, marker.color.g, marker.color.b, marker.color.a = 0.75, 0.15, 0.15, 0.35
+            if not self.debug_visualization:
+                continue
+            marker = self._marker(
+                'candidate_paths', candidate.candidate_id,
+                Marker.LINE_STRIP)
+            marker.points = [Point(x=pose.x, y=pose.y, z=0.04)
+                             for pose in candidate.path]
+            marker.scale.x = 0.06 if (
+                result.selected is not None and
+                candidate.candidate_id == result.selected.candidate_id
+            ) else 0.025
+            if (result.selected is not None and
+                    candidate.candidate_id == result.selected.candidate_id):
+                marker.color.r, marker.color.b, marker.color.a = 1.0, 1.0, 1.0
+            elif candidate.valid:
+                marker.color.g, marker.color.a = 1.0, 0.60
+            else:
+                marker.color.r, marker.color.a = 1.0, 0.25
             candidates.markers.append(marker)
-        self.candidate_pub.publish(candidates)
+            if candidate.path:
+                pose = candidate.path[len(candidate.path)//2]
+                label = self._marker(
+                    'candidate_labels', candidate.candidate_id,
+                    Marker.TEXT_VIEW_FACING)
+                label.pose.position.x = pose.x
+                label.pose.position.y = pose.y
+                label.pose.position.z = 0.30
+                label.scale.z = 0.10
+                label.color.r = label.color.g = label.color.b = label.color.a = 1.0
+                validity = 'VALID' if candidate.valid else 'REJECTED'
+                reason = candidate.reason or 'none'
+                label.text = (
+                    f'id={candidate.candidate_id} {validity}\n'
+                    f'reason={reason}\n'
+                    f'max_steer={math.degrees(candidate.max_steering_rad):.1f}deg')
+                candidates.markers.append(label)
+        if self.debug_visualization:
+            self.candidate_pub.publish(candidates)
         self.candidate_count_pub.publish(Int32(data=len(result.candidates)))
         self.valid_candidate_count_pub.publish(Int32(data=valid_count))
         self.last_plan_summary = {
@@ -1331,6 +1689,17 @@ class AvoidanceCoordinator(Node):
                     'x': item.collision_pose.x, 'y': item.collision_pose.y,
                     'yaw': item.collision_pose.yaw}),
                 'collision_target': item.collision_target or None,
+                'peak_curvature_index': item.peak_curvature_index,
+                'peak_curvature_s_m': item.peak_curvature_s,
+                'peak_curvature_phase': item.peak_curvature_phase,
+                'reference_max_steering_deg': math.degrees(
+                    item.reference_max_steering_rad),
+                'phase_curvature_peaks': [{
+                    'phase': phase, 'path_index': index, 's_m': sample_s,
+                    'curvature_1pm': curvature,
+                    'steering_deg': math.degrees(steering),
+                } for phase, index, sample_s, curvature, steering
+                    in item.phase_curvature_peaks],
                 'rejection_reason': item.reason or None,
             } for item in result.candidates],
         }
@@ -1480,6 +1849,10 @@ class AvoidanceCoordinator(Node):
     def _publish_status(self):
         obstacle_statuses = self._obstacle_statuses()
         self._publish_obstacle_status(obstacle_statuses)
+        self._publish_debug_obstacles()
+        self._publish_debug_collision()
+        trigger_distance = self._replan_trigger_distance()
+        self.replan_threshold_pub.publish(Float32(data=trigger_distance))
         payload = {
             'state': self.state, 'reason': self.reason,
             'operational_state': self.operational_state,
@@ -1489,9 +1862,17 @@ class AvoidanceCoordinator(Node):
             'collision_confirmation_count': self.debounce.count,
             'collision_confirmation_frames':
                 int(self.p['collision_confirmation_frames']),
-            'selected_track_id': self.selected_track.track_id if self.selected_track else -1,
+            'collision_confirmation_track_id':
+                (self.debounce.track_id
+                 if self.debounce.track_id is not None else -1),
+            'selected_track_id':
+                self.selected_track.track_id if self.selected_track else -1,
+            'replan_trigger_distance_m': trigger_distance,
             'track_count': len(self.tracks), 'wall_count': len(self.walls),
             'scan_count': self.scan_count, 'scan_drops': self.scan_drops,
+            'last_collision_evaluation_scan_count':
+                self.last_collision_evaluation_scan_count,
+            'superseded_scan_drops': self.superseded_scan_drops,
             'tf_failures': self.tf_failures, 'performance_ms': self.performance,
             'tf_ready': self.tf_ready,
             'startup_tf_drop_count': self.startup_tf_drop_count,
@@ -1514,6 +1895,7 @@ class AvoidanceCoordinator(Node):
             'last_plan_summary': self.last_plan_summary,
             'last_track_decisions': self.last_track_decisions,
             'cluster_diagnostics': self.cluster_diagnostics,
+            'route_geometry_summary': self.route_geometry_summary,
         }
         text = json.dumps(payload, sort_keys=True)
         self.status_pub.publish(String(data=text))
@@ -1525,7 +1907,22 @@ class AvoidanceCoordinator(Node):
         marker.pose.position.z = 1.25
         marker.scale.z = 0.20
         marker.color.r = marker.color.g = marker.color.b = marker.color.a = 1.0
-        marker.text = f'{self.state}\n{self.reason}'
+        if self.debug_visualization:
+            collision_s = (None if self.last_collision_debug is None else
+                           self.last_collision_debug[1].collision_path_distance)
+            marker.text = '\n'.join((
+                f'planner={self.state}',
+                f'track={payload["selected_track_id"]}',
+                f'confirm={self.debounce.count}/'
+                f'{int(self.p["collision_confirmation_frames"])}',
+                f'trigger={trigger_distance:.2f}m',
+                ('collision_s=none' if collision_s is None else
+                 f'collision_s={collision_s:.2f}m'),
+                f'candidate={self.last_plan_summary.get("selected_candidate_id", "none")}',
+                f'valid={self.last_plan_summary.get("valid_candidate_count", 0)}/'
+                f'{self.last_plan_summary.get("candidate_count", 0)}'))
+        else:
+            marker.text = f'{self.state}\n{self.reason}'
         self.status_marker_pub.publish(marker)
 
     def destroy_node(self):

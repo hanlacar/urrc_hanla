@@ -3,12 +3,18 @@
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            OpaqueFunction, SetEnvironmentVariable)
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    SetEnvironmentVariable,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def include(package, filename, arguments=None, condition=None):
@@ -33,6 +39,17 @@ def validate(context):
         )
     if (t_enabled or p_enabled) and not LaunchConfiguration("parking_map").perform(context).strip():
         raise RuntimeError("parking mode requires parking_map:=/absolute/map.yaml")
+    bench_fake_odom = LaunchConfiguration("bench_fake_odom").perform(
+        context).lower() in truthy
+    simple_compat = LaunchConfiguration("enable_mcu_simple_compat").perform(
+        context).lower() in truthy
+    if bench_fake_odom and not simple_compat:
+        raise RuntimeError(
+            "bench_fake_odom requires enable_mcu_simple_compat:=true")
+    if (bench_fake_odom and int(LaunchConfiguration(
+            "simple_max_forward_drive_level").perform(context)) > 1):
+        raise RuntimeError(
+            "lifted bench permits simple_max_forward_drive_level <= 1")
     return []
 
 
@@ -103,18 +120,71 @@ def generate_launch_description():
         DeclareLaunchArgument("dr_launch_rviz", default_value="true",
                               description="Show CSV reference and actual odom paths in RViz"),
         DeclareLaunchArgument("front_lidar_port", default_value="/dev/ttyUSB0"),
+        DeclareLaunchArgument("avoidance_route_file", default_value=""),
+        DeclareLaunchArgument("avoidance_auto_start", default_value="false"),
+        DeclareLaunchArgument("avoidance_debug_visualization", default_value="false"),
+        DeclareLaunchArgument("avoidance_publish_rejected_points", default_value="false"),
+        DeclareLaunchArgument("avoidance_launch_debug_rviz", default_value="false"),
+        DeclareLaunchArgument(
+            "avoidance_left_curb_inner_y_m", default_value="1.095"),
+        DeclareLaunchArgument(
+            "avoidance_right_curb_inner_y_m", default_value="-1.095"),
+        DeclareLaunchArgument(
+            "avoidance_replan_trigger_distance_m", default_value="2.0"),
+        DeclareLaunchArgument("enable_mcu_simple_compat", default_value="true"),
+        DeclareLaunchArgument("bench_fake_odom", default_value="false"),
+        DeclareLaunchArgument(
+            "simple_max_forward_drive_level", default_value="3",
+            description=(
+                "Production SIMPLE limit; bench_fake_odom requires <= 1")),
+        DeclareLaunchArgument("mission_initial_section", default_value="1"),
         DeclareLaunchArgument("launch_rqt", default_value="true"),
         OpaqueFunction(function=validate),
         include("race_control", "course_autonomy.launch.py", {
                     "launch_rqt": LaunchConfiguration("launch_rqt"),
                 },
                 condition=IfCondition(enable_camera)),
-        include("lidar_ws_plus_bringup", "real_vehicle.launch.py", {
-            "front_serial_port": LaunchConfiguration("front_lidar_port"),
-            "enable_lidar": enable_lidar, "enable_motion_detector": enable_lidar,
-            "enable_avoidance": enable_lidar, "enable_mux": "false",
-            "enable_rear_lidar": "false", "enable_rear_tf": "false",
-        }, IfCondition(enable_lidar)),
+        GroupAction(
+            scoped=True,
+            actions=[
+                include(
+                 "lidar_ws_plus_bringup",
+                 "real_vehicle.launch.py",
+                 {
+                     "front_serial_port": LaunchConfiguration(
+                            "front_lidar_port"),
+                        "enable_lidar": enable_lidar,
+                        "enable_motion_detector": enable_lidar,
+                        "enable_avoidance": enable_lidar,
+                        "enable_mux": "false",
+
+                     # Nested LiDAR bringup에서는 중복 SIMPLE compat 금지
+                     "enable_mcu_simple_compat": "false",
+                     "bench_fake_odom": "false",
+
+                        "route_file": LaunchConfiguration(
+                         "avoidance_route_file"),
+                     "avoidance_auto_start": LaunchConfiguration(
+                         "avoidance_auto_start"),
+                        "debug_visualization": LaunchConfiguration(
+                          "avoidance_debug_visualization"),
+                     "publish_rejected_points": LaunchConfiguration(
+                         "avoidance_publish_rejected_points"),
+                     "launch_debug_rviz": LaunchConfiguration(
+                          "avoidance_launch_debug_rviz"),
+                     "left_curb_inner_y_m": LaunchConfiguration(
+                         "avoidance_left_curb_inner_y_m"),
+                     "right_curb_inner_y_m": LaunchConfiguration(
+                         "avoidance_right_curb_inner_y_m"),
+                      "replan_trigger_distance_m": LaunchConfiguration(
+                          "avoidance_replan_trigger_distance_m"),
+                      "enable_rear_lidar": "false",
+                      "enable_rear_tf": "false",
+                    },
+                    IfCondition(enable_lidar),
+              )
+         ],
+        ),
         OpaqueFunction(function=launch_dr_follower, args=[share, mission_share]),
         include("t_parking_sim", "real_t_parking.launch.py", {
             "map": LaunchConfiguration("parking_map"), "map_mode": "saved",
@@ -130,8 +200,33 @@ def generate_launch_description():
         }, IfCondition(enable_parallel_parking)),
         Node(package="hanla_unified", executable="mission_decision",
              name="mission_decision", output="screen",
-             parameters=[str(share / "config" / "mission_decision.yaml")],
+             parameters=[str(share / "config" / "mission_decision.yaml"), {
+                 "initial_section": ParameterValue(
+                     LaunchConfiguration("mission_initial_section"),
+                     value_type=int),
+             }],
              remappings=[("/lidar_drive", "/avoidance/drive_cmd"),
                          ("/lidar_wheel", "/avoidance/wheel_cmd"),
                          ("/lidar_stop", "/avoidance/stop_cmd")]),
+        Node(
+            package="lidar_ws_plus_bringup", executable="mcu_simple_compat",
+            name="integrated_mcu_simple_compat", output="screen",
+            condition=IfCondition(LaunchConfiguration(
+                "enable_mcu_simple_compat")),
+            parameters=[{
+                "input_drive_topic": "/cmd_drive",
+                "input_wheel_topic": "/cmd_wheel",
+                "input_stop_topic": "/cmd_stop",
+                "drive_input_unit": "mps",
+                "wheel_input_type": "float32",
+                "stage_per_mps": 4.3956043956,
+                "wheel_sign_multiplier": -1,
+                "wheel_limit_deg": 22,
+                "max_forward_drive_level": ParameterValue(
+                    LaunchConfiguration("simple_max_forward_drive_level"),
+                    value_type=int),
+                "publish_mode_5": False,
+                "bench_fake_odom": ParameterValue(
+                    LaunchConfiguration("bench_fake_odom"), value_type=bool),
+            }]),
     ])

@@ -9,7 +9,7 @@ lidar_ws_plus_vehicle:
     rear_track_width_m: 0.785
     wheel_radius_m: 0.135
     steering_limit_deg: 22.0
-    mcu_wheel_limit_deg: 27
+    mcu_wheel_limit_deg: 22
     steering_negative_is_left: true
 
     # Selected integration TF candidates. These remain launch-overridable.
@@ -27,5 +27,5 @@ lidar_ws_plus_vehicle:
     rear_lidar_yaw_rad: 3.14159265359
 
     # Context-specific values intentionally remain in their source configs:
-    # avoidance wheelbase=0.77, length=1.30, max steering=25/27 deg;
+    # avoidance wheelbase=0.73, length=1.30, max steering=22 deg;
     # legacy parking-memory footprint=1.00 x 0.60 m.

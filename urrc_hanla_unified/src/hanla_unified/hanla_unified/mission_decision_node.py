@@ -19,7 +19,7 @@ class MissionDecisionNode(Node):
         defaults = {
             "initial_section": 1, "publish_rate_hz": 20.0,
             "source_timeout_sec": 0.5, "camera_confidence_min": 0.8,
-            "maximum_speed_mps": 0.70, "maximum_steering_deg": 27.0,
+            "maximum_speed_mps": 0.70, "maximum_steering_deg": 22.0,
             "stage_1_speed_mps": 0.229, "stage_2_speed_mps": 0.455,
             "stage_3_speed_mps": 0.70, "lidar_steering_sign": -1.0,
             "maximum_steering_rate_deg_s": 45.0,
@@ -42,6 +42,10 @@ class MissionDecisionNode(Node):
         self.speed_pub = self.create_publisher(Float32, "/cmd_drive", 10)
         self.steer_pub = self.create_publisher(Float32, "/cmd_wheel", 10)
         self.stop_pub = self.create_publisher(Bool, "/cmd_stop", 10)
+        # Applied integrated mode for LiDAR safety/planning consumers.  This
+        # mirrors the selected mission section; it is never fabricated by the
+        # production SIMPLE compatibility bridge.
+        self.mode_pub = self.create_publisher(String, "/mcu/current_mode", 10)
         self.hold_pub = self.create_publisher(Bool, "/mcu/slope_hold", 10)
         self.source_pub = self.create_publisher(String, "/mission/active_source", 10)
         self.status_pub = self.create_publisher(String, "/mission/decision_status", 10)
@@ -201,6 +205,7 @@ class MissionDecisionNode(Node):
         # explicit obstacle/safety-stop input.
         emergency_stop = requires_emergency_brake(result)
         self.stop_pub.publish(Bool(data=emergency_stop))
+        self.mode_pub.publish(String(data=str(self.section)))
         self.hold_pub.publish(Bool(data=slope_hold))
         self.source_pub.publish(String(data=result.source))
         self.status_pub.publish(String(data=json.dumps({"section": self.section,

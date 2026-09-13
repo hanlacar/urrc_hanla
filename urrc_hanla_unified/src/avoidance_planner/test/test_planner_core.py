@@ -1,8 +1,5 @@
 import math
 from types import SimpleNamespace
-from unittest.mock import Mock
-
-import pytest
 
 from avoidance_planner.collision_evaluator import (
     ReplanDebounce, collision_response, evaluate_track_collision)
@@ -10,13 +7,18 @@ from avoidance_planner.geometry import (
     Box2, Pose2, footprint_collision, path_curvatures, path_frenet_collision,
     path_min_clearances, steering_angles, vehicle_polygon)
 from avoidance_planner.local_planner import (
-    adaptive_corridor_fractions, calculate_corridor, interpolate_route,
+    _build_path, adaptive_corridor_fractions, calculate_corridor, interpolate_route,
+    interpolate_route_legacy_hermite,
+    minimum_quintic_transition_length,
     observed_surface_to_frenet_box, plan_candidates, project_route,
-    quintic_blend, route_lengths, world_box_to_frenet)
+    quintic_blend, route_lengths, route_segment_steering,
+    route_yaw_tangent_errors, world_box_to_frenet)
 from avoidance_planner.perception import (
     DYNAMIC_OBSTACLE, STATIC_OBSTACLE, TrackManager, ScanPoint,
     adaptive_clusters, adaptive_gap, cluster_groups, preprocess_scan,
-    ransac_line, split_walls_and_objects)
+    partition_scan_points, ransac_line, split_walls_and_objects)
+from avoidance_route.route_follower import curvature_safe_waypoints
+import pytest
 
 
 def straight_route(length=15.0, step=0.05):
@@ -34,18 +36,19 @@ def curved_route(length=30.0, step=0.10):
     return tuple(points)
 
 
-def test_route_interpolation_uses_csv_tangents_without_waypoint_corners():
+def test_legacy_hermite_preserves_smooth_true_tangents_on_circle():
     radius = 4.0
     route = tuple(
         Pose2(radius*math.sin(angle), radius*(1.0-math.cos(angle)), angle)
         for angle in (0.0, 0.04, 0.08, 0.12, 0.16))
     lengths = route_lengths(route)
     samples = tuple(
-        Pose2(*interpolate_route(route, lengths, index*lengths[-1]/80.0))
+        Pose2(*interpolate_route_legacy_hermite(
+            route, lengths, index*lengths[-1]/80.0))
         for index in range(81))
     maximum = max(abs(value) for value in path_curvatures(samples))
     assert maximum == pytest.approx(1.0/radius, abs=0.01)
-    assert math.degrees(math.atan(0.77*maximum)) < 25.0
+    assert math.degrees(math.atan(0.73*maximum)) < 22.0
 
 
 def route_aligned_world_box(route, s, d, length=0.65, width=0.39):
@@ -92,6 +95,28 @@ def test_self_reflection_removed():
         [0.2, 1.0], 0.0, 0.0, 0.12, 12.0,
         0.1, 5.0, 2.0, -0.5, 0.5, 0.3)
     assert [point.index for point in points] == [1]
+
+
+def test_planner_roi_partition_uses_the_same_filter_as_control_path():
+    bounds = (-7.0, -0.1, 1.3, -0.75, 0.75, 0.47)
+
+    def partition(distance, angle):
+        return partition_scan_points(
+            [distance], angle, 0.0, 0.12, 12.0, *bounds)
+
+    inside, rejected = partition(3.0, math.pi)
+    assert len(inside) == 1 and rejected == []
+    assert partition(8.0, math.pi)[0] == []  # below x minimum
+    assert len(partition(8.0, math.pi)[1]) == 1
+    assert partition(1.0, 0.0)[0] == []  # above x maximum
+    assert len(partition(1.0, 0.0)[1]) == 1
+    outside_y = partition(math.sqrt(8.0), 3.0*math.pi/4.0)
+    assert outside_y[0] == [] and len(outside_y[1]) == 1
+
+    args = ([3.0], math.pi, 0.0, 0.12, 12.0, *bounds)
+    control_points = preprocess_scan(*args)
+    debug_points, _ = partition_scan_points(*args)
+    assert control_points == debug_points
 
 
 def test_minimum_point_count_removes_noise():
@@ -321,7 +346,7 @@ def test_common_planner_builds_curved_frenet_avoidance_and_rejoin(side):
         target_fractions=(0.25, 0.50, 0.75, 0.80, 0.85, 0.90),
         rejoin_straight_extension=2.0)
     assert result.selected is not None
-    assert result.selected.max_steering_rad <= math.radians(25.0)
+    assert result.selected.max_steering_rad <= math.radians(22.0)
     assert result.selected.obstacle_clearance >= 0.20
     assert result.selected.curb_clearance > 0.0
     assert result.selected.terminal_curvature_error <= 0.04
@@ -376,7 +401,7 @@ def test_dense_corridor_edge_sampling_recovers_twenty_five_degree_candidate():
         Box2(16.4647, 17.1147, 0.56179645, 0.823), 1.095, -1.095,
         target_fractions=(0.25, 0.50, 0.75, 0.80, 0.85, 0.90))
     assert result.selected is not None
-    assert result.selected.max_steering_rad <= math.radians(25.0)
+    assert result.selected.max_steering_rad <= math.radians(22.0)
     assert result.selected.obstacle_clearance > 0.20
     assert result.selected.curb_clearance > 0.0
 
@@ -406,16 +431,16 @@ def test_candidate_has_straight_csv_rejoin_extension():
 def test_curvature_and_steering_use_bicycle_model():
     selected = nominal_plan().selected
     curvature = path_curvatures(selected.path)
-    steering = steering_angles(selected.path, 0.77)
+    steering = steering_angles(selected.path, 0.73)
     assert max(abs(value) for value in curvature) == pytest.approx(selected.max_curvature)
     assert max(abs(value) for value in steering) == pytest.approx(selected.max_steering_rad)
 
 
-def test_candidates_over_twenty_five_degrees_are_discarded_not_clamped():
+def test_candidates_over_twenty_two_degrees_are_discarded_not_clamped():
     result = nominal_plan()
     rejected = [item for item in result.candidates
                 if item.reason == 'STEERING_LIMIT']
-    assert rejected and all(item.max_steering_rad > math.radians(25) for item in rejected)
+    assert rejected and all(item.max_steering_rad > math.radians(22) for item in rejected)
 
 
 def test_path_facing_surface_extends_obstacle_away_from_csv():
@@ -451,19 +476,173 @@ def test_adaptive_targets_cover_both_corridor_edges_without_touching_them():
     assert 0.80 <= values[-1] < 1.0
 
 
-def test_minimum_turn_radius_and_curvature_bound_match_twenty_five_degrees():
-    wheelbase = 0.77
-    r_min = wheelbase/math.tan(math.radians(25.0))
-    assert r_min == pytest.approx(1.651, abs=1.0e-3)
-    curvature_bound = math.tan(math.radians(25.0))/wheelbase
-    assert curvature_bound == pytest.approx(0.6056, abs=1.0e-3)
+def test_minimum_turn_radius_and_curvature_bound_match_twenty_two_degrees():
+    wheelbase = 0.73
+    r_min = wheelbase/math.tan(math.radians(22.0))
+    assert r_min == pytest.approx(1.807, abs=1.0e-3)
+    curvature_bound = math.tan(math.radians(22.0))/wheelbase
+    assert curvature_bound == pytest.approx(0.5535, abs=1.0e-3)
     assert curvature_bound == pytest.approx(1.0/r_min)
 
 
 def test_selected_path_respects_minimum_turn_radius():
     selected = nominal_plan().selected
     radius = 1.0/selected.max_curvature
-    assert radius >= 0.77/math.tan(math.radians(25))
+    assert radius >= 0.73/math.tan(math.radians(22))
+
+
+def test_every_valid_candidate_respects_runtime_twenty_two_degree_limit():
+    result = plan_candidates(
+        straight_route(), Pose2(3.0, 0.0, 0.0),
+        Box2(5.675, 6.325, 0.585, 0.975), 1.50, -1.50,
+        wheelbase=0.73, max_steering_rad=math.radians(22.0),
+        target_fractions=(), lateral_target_samples=7,
+        return_lengths=(2.0, 2.5, 3.0, 3.5, 4.0))
+    assert result.selected is not None
+    assert all(candidate.max_steering_rad <= math.radians(22.0)+1.0e-9
+               for candidate in result.candidates if candidate.valid)
+
+
+def test_five_centimetre_quintic_shift_over_1p6m_is_not_high_steering():
+    route = straight_route()
+    projection = project_route(route, 0.0, 0.0)
+    path, _ = _build_path(
+        route, Pose2(0.0, 0.0, 0.0), projection,
+        1.60, 2.25, 0.05, 2.0, 0.0, 0.02, 1.30, 0.15)
+    required = max(abs(math.degrees(value))
+                   for value in steering_angles(path, 0.73))
+    assert required < 6.0
+    assert minimum_quintic_transition_length(
+        0.05, math.tan(math.radians(22.0))/0.73) < 1.0
+
+
+def test_large_shift_entry_distance_is_longer_than_current_trigger():
+    curvature_limit = math.tan(math.radians(22.0))/0.73
+    assert minimum_quintic_transition_length(
+        0.50, curvature_limit) == pytest.approx(2.283817204)
+    assert minimum_quintic_transition_length(
+        0.625, curvature_limit) == pytest.approx(2.553385259)
+
+
+def test_straight_reference_candidate_has_zero_curvature():
+    route = straight_route()
+    projection = project_route(route, 0.0, 0.0)
+    path, _ = _build_path(
+        route, Pose2(0.0, 0.0, 0.0), projection,
+        1.60, 2.25, 0.0, 2.0, 0.0, 0.02, 1.30, 0.15)
+    assert max(abs(value) for value in path_curvatures(path)) < 1.0e-9
+
+
+def test_csv_yaw_position_tangent_mismatch_is_detected():
+    route = (Pose2(0.0, 0.0, 0.0), Pose2(1.0, 0.0, 0.4),
+             Pose2(2.0, 0.0, 0.0))
+    errors = route_yaw_tangent_errors(route)
+    assert math.degrees(errors[1][2]) == pytest.approx(math.degrees(0.4))
+
+
+def test_mode5_csv_route_exposes_four_over_limit_yaw_delta_segments():
+    import csv
+    from pathlib import Path
+    path = Path(__file__).parents[3] / 'routes' / 'avoidance_mode5_odom.csv'
+    with path.open(newline='', encoding='utf-8') as stream:
+        route = tuple(Pose2(float(row['x_m']), float(row['y_m']),
+                            float(row['yaw']))
+                      for row in csv.DictReader(stream))
+    diagnostics = route_segment_steering(route, 0.73)
+    violations = [item for item in diagnostics
+                  if abs(item[4]) > math.radians(22.0)]
+    assert [item[0] for item in violations] == [0, 12, 53, 202]
+
+
+def _mode5_route():
+    import csv
+    from pathlib import Path
+    path = Path(__file__).parents[3] / 'routes' / 'avoidance_mode5_odom.csv'
+    with path.open(newline='', encoding='utf-8') as stream:
+        return tuple(Pose2(float(row['x_m']), float(row['y_m']),
+                           float(row['yaw']))
+                     for row in csv.DictReader(stream))
+
+
+def _safe_mode5_route():
+    raw = _mode5_route()
+    waypoints = tuple(SimpleNamespace(
+        index=index, x=point.x, y=point.y, yaw=point.yaw,
+        direction=1, drive_level=1.0)
+        for index, point in enumerate(raw))
+    reference, report = curvature_safe_waypoints(
+        waypoints, wheelbase_m=0.73, max_steering_deg=22.0,
+        output_interval_m=0.05, validation_interval_m=0.005,
+        steering_reserve_deg=2.0, max_waypoint_displacement_m=0.02)
+    return tuple(Pose2(point.x, point.y, point.yaw)
+                 for point in reference), report
+
+
+def test_actual_route_continuous_reference_has_no_over_limit_sample():
+    route, report = _safe_mode5_route()
+    curvature_limit = math.tan(math.radians(22.0))/0.73
+    assert report.validation_interval_m <= 0.01
+    assert report.max_validation_spacing_m <= 0.01
+    assert report.max_curvature <= curvature_limit
+    assert report.max_steering_rad <= math.radians(22.0)
+    assert report.over_limit_sample_count == 0
+    assert report.heading_continuous
+    assert report.curvature_continuous
+    assert report.max_waypoint_displacement_m <= 0.02
+    assert max(abs(value) for value in path_curvatures(route)) <= curvature_limit
+    assert not [item for item in route_segment_steering(route, 0.73)
+                if abs(item[4]) > math.radians(22.0)]
+
+
+def test_planner_interpolation_uses_the_follower_reference_without_respline():
+    route, _report = _safe_mode5_route()
+    lengths = route_lengths(route)
+    for index in range(0, len(route), 37):
+        x, y, yaw = interpolate_route(route, lengths, lengths[index])
+        expected = route[index]
+        assert (x, y) == pytest.approx((expected.x, expected.y), abs=1.0e-12)
+        assert math.atan2(math.sin(yaw-expected.yaw),
+                          math.cos(yaw-expected.yaw)) == pytest.approx(
+                              0.0, abs=1.0e-12)
+
+
+def test_actual_44_degree_regression_is_below_twenty_two_degrees(monkeypatch):
+    raw = _mode5_route()
+    raw_projection = project_route(raw, 0.0, 0.0)
+    # obstacle_s_min=2.458923 reproduces the recorded 1.658923 m legacy
+    # conservative entry distance after the 0.65 m half-length and 0.15 m
+    # longitudinal margin were deducted.
+    with monkeypatch.context() as context:
+        import avoidance_planner.local_planner as planner
+        context.setattr(
+            planner, 'interpolate_route', interpolate_route_legacy_hermite)
+        old_path, _ = _build_path(
+            raw, Pose2(0.0, 0.0, 0.0), raw_projection,
+            2.458923, 3.108923, -0.053507, 2.0, 2.0,
+            0.05, 1.30, 0.15)
+        old_max = max(abs(math.degrees(value))
+                      for value in steering_angles(old_path, 0.73))
+    assert old_max == pytest.approx(44.770880, abs=1.0e-5)
+
+    route, report = _safe_mode5_route()
+    projection = project_route(route, 0.0, 0.0)
+    candidate, _ = _build_path(
+        route, Pose2(0.0, 0.0, 0.0), projection,
+        2.458923, 3.108923, -0.053507, 2.0, 2.0,
+        0.05, 1.30, 0.15)
+    candidate_max = max(abs(value)
+                        for value in steering_angles(candidate, 0.73))
+    assert report.max_steering_rad <= math.radians(22.0)
+    assert candidate_max <= math.radians(22.0)
+    assert math.degrees(candidate_max) == pytest.approx(19.666048, abs=1.0e-5)
+
+
+def test_candidate_reports_peak_curvature_for_each_path_phase():
+    candidate = nominal_plan().selected
+    phases = {item[0] for item in candidate.phase_curvature_peaks}
+    assert {'ENTRY', 'OBSTACLE_PASS', 'REJOIN',
+            'REFERENCE_EXTENSION'} <= phases
+    assert candidate.peak_curvature_index >= 0
 
 
 def test_selected_path_has_positive_obstacle_and_curb_clearance():

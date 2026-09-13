@@ -5,9 +5,9 @@ from unittest.mock import Mock
 
 import pytest
 import yaml
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 
-from avoidance_route.route_follower import RouteFollower
+from avoidance_route.route_follower import RouteFollower, curvature_safe_waypoints
 from avoidance_route.route_following import (
     REQUIRED_COLUMNS, RouteError, Waypoint, avoidance_rejoin_ready,
     compute_control, goal_reached,
@@ -238,7 +238,8 @@ def test_replan_request_latches_exact_stop_without_restart():
         p={'replan_stop_enabled': True}, state='FOLLOWING', reason='',
         replan_ignore_until_clear=False,
         start_requested=True, _publish_stop=Mock(), _close_actual_log=Mock(),
-        _publish_status=Mock(), get_logger=lambda: Mock())
+        _publish_status=Mock(), get_logger=lambda: Mock(),
+        _maybe_ready_for_avoidance_start=Mock(return_value=False))
     RouteFollower._replan_required(fake, Bool(data=True))
     assert fake.state == 'STOPPED_FOR_REPLAN'
     assert fake.reason == 'REPLAN_REQUIRED' and not fake.start_requested
@@ -250,16 +251,170 @@ def test_completed_track_replan_is_ignored_until_false_acknowledgement():
     fake = SimpleNamespace(
         p={'replan_stop_enabled': True}, state='FOLLOWING', reason='',
         replan_ignore_until_clear=True, _publish_stop=Mock(),
-        _close_actual_log=Mock(), _publish_status=Mock(), get_logger=lambda: Mock())
+        _close_actual_log=Mock(), _publish_status=Mock(), get_logger=lambda: Mock(),
+        _maybe_ready_for_avoidance_start=Mock(return_value=False))
     RouteFollower._replan_required(fake, Bool(data=True))
     assert fake.state == 'FOLLOWING'
     RouteFollower._replan_required(fake, Bool(data=False))
     assert not fake.replan_ignore_until_clear
 
 
+def _avoidance_handoff_fake(now_ns=10_000_000_000):
+    from rclpy.time import Time
+
+    fake = SimpleNamespace(
+        state='FOLLOWING', reason='', planner_state='', selected_points=(),
+        selected_path_receive_time=None, selected_path_signature=None,
+        selected_path_stamp_ns=None, avoidance_ready_since=None,
+        avoidance_auto_start_failure_logged=True,
+        avoidance_active=True, current_mode='5',
+        replan_ignore_until_clear=False, start_requested=True,
+        p={
+            'replan_stop_enabled': True,
+            'allowed_avoidance_modes': ['5'],
+            'selected_path_timeout_s': 3.0,
+            'avoidance_speed_mps': 1.0,
+        },
+        get_clock=lambda: SimpleNamespace(now=lambda: Time(nanoseconds=now_ns)),
+        get_logger=lambda: Mock(), _publish_stop=Mock(), _publish_status=Mock(),
+        _input_stamp_regressed=Mock(return_value=False),
+        _yaw=RouteFollower._yaw, _stamp_ns=RouteFollower._stamp_ns)
+    fake._mode_allowed = lambda: RouteFollower._mode_allowed(fake)
+    fake._maybe_ready_for_avoidance_start = (
+        lambda: RouteFollower._maybe_ready_for_avoidance_start(fake))
+    return fake
+
+
+def _selected_path_message():
+    from geometry_msgs.msg import PoseStamped
+    from nav_msgs.msg import Path as PathMsg
+
+    path = PathMsg()
+    path.header.frame_id = 'odom'
+    path.header.stamp.sec = 9
+    for x in (0.0, 1.0):
+        pose = PoseStamped()
+        pose.pose.position.x = x
+        pose.pose.orientation.w = 1.0
+        path.poses.append(pose)
+    return path
+
+
+def _handoff_event(fake, event):
+    if event == 'replan':
+        RouteFollower._replan_required(fake, Bool(data=True))
+    elif event == 'path':
+        RouteFollower._selected_path(fake, _selected_path_message())
+    elif event == 'ready':
+        RouteFollower._planner_status(
+            fake, String(data='{"state": "PATH_READY"}'))
+    else:
+        raise AssertionError(f'unknown handoff event: {event}')
+
+
+@pytest.mark.parametrize('events', [
+    ('replan', 'path', 'ready'),
+    ('path', 'ready', 'replan'),
+    ('ready', 'path', 'replan'),
+    ('path', 'replan', 'ready'),
+])
+def test_avoidance_handoff_is_independent_of_callback_order(events):
+    fake = _avoidance_handoff_fake()
+    for event in events:
+        _handoff_event(fake, event)
+    assert fake.state == 'WAITING_FOR_AVOIDANCE_START'
+    assert fake.reason == 'PATH_READY'
+    assert fake.avoidance_ready_since.nanoseconds == 10_000_000_000
+
+
+@pytest.mark.parametrize('blocked_by', [
+    'missing_path', 'stale_path', 'inactive', 'mode_not_allowed',
+])
+def test_avoidance_handoff_requires_every_safety_condition(blocked_by):
+    from rclpy.time import Time
+
+    fake = _avoidance_handoff_fake()
+    fake.state = 'STOPPED_FOR_REPLAN'
+    fake.planner_state = 'PATH_READY'
+    fake.selected_points = straight_points()[:2]
+    fake.selected_path_receive_time = Time(nanoseconds=9_000_000_000)
+    if blocked_by == 'missing_path':
+        fake.selected_points = straight_points()[:1]
+    elif blocked_by == 'stale_path':
+        fake.selected_path_receive_time = Time(nanoseconds=6_000_000_000)
+    elif blocked_by == 'inactive':
+        fake.avoidance_active = False
+    elif blocked_by == 'mode_not_allowed':
+        fake.current_mode = '4'
+    assert not RouteFollower._maybe_ready_for_avoidance_start(fake)
+    assert fake.state == 'STOPPED_FOR_REPLAN'
+    assert fake.avoidance_ready_since is None
+    fake._publish_stop.assert_not_called()
+
+
+def test_duplicate_ready_callbacks_do_not_reset_avoidance_ready_since():
+    from rclpy.time import Time
+
+    fake = _avoidance_handoff_fake()
+    for event in ('path', 'ready', 'replan'):
+        _handoff_event(fake, event)
+    ready_since = fake.avoidance_ready_since
+    fake.get_clock = lambda: SimpleNamespace(
+        now=lambda: Time(nanoseconds=11_000_000_000))
+    RouteFollower._planner_status(
+        fake, String(data='{"state": "PATH_READY"}'))
+    RouteFollower._selected_path(fake, _selected_path_message())
+    RouteFollower._replan_required(fake, Bool(data=True))
+    assert fake.state == 'WAITING_FOR_AVOIDANCE_START'
+    assert fake.avoidance_ready_since is ready_since
+
+
+@pytest.mark.parametrize('last_authority_event', ['active', 'mode'])
+def test_final_authority_callback_can_complete_ready_handoff(
+        last_authority_event):
+    from rclpy.time import Time
+
+    fake = _avoidance_handoff_fake()
+    fake.state = 'STOPPED_FOR_REPLAN'
+    fake.planner_state = 'PATH_READY'
+    fake.selected_points = straight_points()[:2]
+    fake.selected_path_receive_time = Time(nanoseconds=9_000_000_000)
+    if last_authority_event == 'active':
+        fake.avoidance_active = False
+        fake.last_active_receive_time = None
+        RouteFollower._active(fake, Bool(data=True))
+    else:
+        fake.current_mode = None
+        RouteFollower._mcu_mode(fake, String(data='5'))
+    assert fake.state == 'WAITING_FOR_AVOIDANCE_START'
+
+
+def test_ready_handoff_only_publishes_zero_command():
+    from rclpy.time import Time
+
+    fake = _avoidance_handoff_fake()
+    fake.state = 'STOPPED_FOR_REPLAN'
+    fake.planner_state = 'PATH_READY'
+    fake.selected_points = straight_points()[:2]
+    fake.selected_path_receive_time = Time(nanoseconds=9_000_000_000)
+    fake.speed = 1.0
+    fake.steering = 0.2
+    fake.steering_pub = Mock()
+    fake.requested_drive_pub = Mock()
+    fake.requested_wheel_pub = Mock()
+    fake.control_source_pub = Mock()
+    fake.control_source = 'GPS'
+    fake._publish_stop = lambda: RouteFollower._publish_stop(fake)
+    assert RouteFollower._maybe_ready_for_avoidance_start(fake)
+    assert fake.state == 'WAITING_FOR_AVOIDANCE_START'
+    assert fake.requested_drive_pub.publish.call_args.args[0].data == 0.0
+    assert fake.requested_wheel_pub.publish.call_args.args[0].data == 0
+
+
 def test_route_and_avoidance_use_one_requested_command_pair():
     fake = SimpleNamespace(
-        p={'route_drive_level': 2.0, 'avoidance_drive_level': 1.0},
+        p={'route_drive_level': 2.0, 'avoidance_drive_level': 1.0,
+           'max_steering_deg': 22.0},
         requested_drive_pub=Mock(), requested_wheel_pub=Mock(),
         control_source_pub=Mock(),
         control_source='STOP', _publish_stop=Mock())
@@ -272,23 +427,24 @@ def test_route_and_avoidance_use_one_requested_command_pair():
 
 def test_requested_wheel_is_saturated_to_vehicle_contract():
     fake = SimpleNamespace(
-        p={'route_drive_level': 2.0, 'avoidance_drive_level': 1.0},
+        p={'route_drive_level': 2.0, 'avoidance_drive_level': 1.0,
+           'max_steering_deg': 22.0},
         requested_drive_pub=Mock(), requested_wheel_pub=Mock(),
         control_source_pub=Mock(), control_source='STOP', _publish_stop=Mock())
     RouteFollower._publish_source_pair(fake, 'LIDAR', -80.0)
-    assert fake.requested_wheel_pub.publish.call_args.args[0].data == 27
+    assert fake.requested_wheel_pub.publish.call_args.args[0].data == 22
 
 
 def test_avoidance_and_rejoining_publish_drive_level_one():
     for source in ('LIDAR', 'REJOINING'):
         fake = SimpleNamespace(
-            p={'avoidance_drive_level': 1.0},
+            p={'avoidance_drive_level': 1.0, 'max_steering_deg': 22.0},
             requested_drive_pub=Mock(), requested_wheel_pub=Mock(),
             control_source_pub=Mock(), control_source='STOP',
             _publish_stop=Mock())
         RouteFollower._publish_source_pair(fake, source, 8.0)
         assert fake.requested_drive_pub.publish.call_args.args[0].data == 1.0
-        assert abs(fake.requested_wheel_pub.publish.call_args.args[0].data) <= 27
+        assert abs(fake.requested_wheel_pub.publish.call_args.args[0].data) <= 22
 
 
 def test_inactive_or_non_mode_five_authority_is_rejected():
@@ -316,13 +472,24 @@ def test_external_reference_path_is_accepted_without_csv():
         pose.pose.orientation.w = 1.0
         path.poses.append(pose)
     fake = SimpleNamespace(
-        p={'reference_path_frame': 'odom', 'route_drive_level': 2.0},
+        p={'reference_path_frame': 'odom', 'route_drive_level': 2.0,
+           'wheelbase_m': 0.73, 'max_steering_deg': 22.0,
+           'reference_output_interval_m': 0.05,
+           'reference_validation_interval_m': 0.005,
+           'reference_steering_reserve_deg': 2.0,
+           'reference_max_waypoint_displacement_m': 0.02},
         state='WAITING_FOR_ROUTE', odom=None, segment=99, points=(), reason='old',
+        raw_points=(), reference_geometry_report=None,
+        published_reference_signature=None,
         _yaw=RouteFollower._yaw,
+        _path_message_signature=RouteFollower._path_message_signature,
+        _build_reference=lambda points: curvature_safe_waypoints(
+            points, 0.73, 22.0, 0.05, 0.005, 2.0, 0.02),
+        _publish_reference=Mock(), _error=Mock(),
         get_logger=lambda: Mock())
     RouteFollower._reference_path(fake, path)
     assert fake.state == 'WAITING_FOR_ODOM'
-    assert fake.segment == 0 and len(fake.points) == 2
+    assert fake.segment == 0 and len(fake.points) > 2
     assert all(point.drive_level == 2.0 for point in fake.points)
 
 
@@ -334,7 +501,7 @@ def test_follower_rejects_unclamped_over_limit_control():
                         math.radians(20), 0.0, math.radians(2))
 
 
-def test_attempt_avoidance_start_succeeds_when_path_ready(tmp_path):
+def test_manual_start_service_succeeds_when_path_ready():
     from nav_msgs.msg import Path as PathMsg
     from rclpy.time import Time
     clock = SimpleNamespace(now=lambda: Time(nanoseconds=1_000_000_000))
@@ -351,8 +518,13 @@ def test_attempt_avoidance_start_succeeds_when_path_ready(tmp_path):
         _publish_stop=Mock(), get_logger=lambda: Mock(),
         _mode_allowed=lambda: True, avoidance_active=True,
         _pose=lambda: (0.0, 0.0, 0.0))
-    ok, message = RouteFollower._attempt_avoidance_start(fake)
-    assert ok and fake.state == 'FOLLOWING_AVOIDANCE'
+    fake._attempt_avoidance_start = (
+        lambda: RouteFollower._attempt_avoidance_start(fake))
+    response = SimpleNamespace(success=False, message='')
+    result = RouteFollower._start_selected_path(fake, None, response)
+    assert result is response and response.success
+    assert response.message == 'selected avoidance path started'
+    assert fake.state == 'FOLLOWING_AVOIDANCE'
     assert fake.control_source == 'LIDAR'
     assert fake.avoidance_track_id == 3
     assert fake.avoidance_segment == 0

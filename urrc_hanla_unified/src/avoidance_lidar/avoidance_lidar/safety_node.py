@@ -28,7 +28,7 @@ class LidarSafetyNode(Node):
             'stop_distance_m': 0.50, 'resume_distance_m': 0.60,
             'emergency_stop_distance_m': 0.30,
             'front_sector_deg': 90.0, 'min_valid_range_m': 0.05,
-            'corridor_width_m': 1.20, 'wheelbase_m': 0.77,
+            'corridor_width_m': 1.20, 'wheelbase_m': 0.73,
             'roi_min_length_m': 1.50, 'roi_max_length_m': 5.0,
             'roi_time_horizon_sec': 1.50,
             'reaction_time_sec': 0.30, 'max_deceleration_mps2': 1.0,
@@ -37,7 +37,7 @@ class LidarSafetyNode(Node):
             'max_closing_speed_mps': 10.0,
             'stop_confirm_scans': 2, 'clear_confirm_scans': 3,
             'scan_timeout_sec': 0.50, 'command_timeout_sec': 0.30,
-            'stop_on_scan_timeout': True, 'steering_limit_deg': 27,
+            'stop_on_scan_timeout': True, 'steering_limit_deg': 22,
             'publish_rate_hz': 20.0, 'odom_topic': '/odom',
             'odom_timeout_sec': 0.50, 'steering_sign': -1.0,
             'active_topic': '/avoidance/active',
@@ -48,8 +48,8 @@ class LidarSafetyNode(Node):
         for name, value in defaults.items():
             self.declare_parameter(name, value)
         self.p = {name: self.get_parameter(name).value for name in defaults}
-        if not 0 < int(self.p['steering_limit_deg']) <= 27:
-            raise ValueError('steering_limit_deg must be in [1, 27]')
+        if not 0 < int(self.p['steering_limit_deg']) <= 22:
+            raise ValueError('steering_limit_deg must be in [1, 22]')
         self.gate = LidarSafetyGate(**{
             name: self.p[name] for name in (
                 'stop_distance_m', 'resume_distance_m',
@@ -97,7 +97,7 @@ class LidarSafetyNode(Node):
             1.0 / max(1.0, float(self.p['publish_rate_hz'])), self._tick)
         self.get_logger().info(
             'Safety gate owns private avoidance mux inputs; drive unit is '
-            'the MCU discrete level and steering is saturated to +/-27 deg')
+            'the MCU discrete level and steering is saturated to +/-22 deg')
 
     def _scan(self, msg):
         self.last_scan_time = self.get_clock().now()

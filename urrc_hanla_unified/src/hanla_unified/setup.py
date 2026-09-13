@@ -16,6 +16,7 @@ setup(
         (os.path.join("share", package_name, "routes"), glob("routes/*.csv")),
     ],
     install_requires=["setuptools"],
+    tests_require=["pytest"],
     zip_safe=True,
     maintainer="urrc_hanla",
     maintainer_email="maintainer@example.com",

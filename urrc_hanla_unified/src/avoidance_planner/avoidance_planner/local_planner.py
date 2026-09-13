@@ -6,7 +6,7 @@ import time
 
 from .geometry import (
     Box2, Pose2, first_path_frenet_collision, max_curvature_rate, path_curvatures,
-    path_frenet_clearances, path_frenet_collision, steering_angles)
+    path_frenet_clearances, steering_angles)
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,11 @@ class Candidate:
     collision_path_index: int = -1
     collision_pose: Pose2 | None = None
     collision_target: str = ''
+    peak_curvature_index: int = -1
+    peak_curvature_s: float = 0.0
+    peak_curvature_phase: str = ''
+    reference_max_steering_rad: float = 0.0
+    phase_curvature_peaks: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -70,6 +75,57 @@ def route_lengths(route):
     for first, second in zip(route, route[1:]):
         values.append(values[-1]+math.hypot(second.x-first.x, second.y-first.y))
     return values
+
+
+def route_segment_steering(route, wheelbase):
+    """Return CSV yaw-delta curvature diagnostics for every route segment."""
+    diagnostics = []
+    for index, (first, second) in enumerate(zip(route, route[1:])):
+        ds = math.hypot(second.x-first.x, second.y-first.y)
+        delta_yaw = math.atan2(math.sin(second.yaw-first.yaw),
+                               math.cos(second.yaw-first.yaw))
+        curvature = 0.0 if ds <= 1.0e-12 else delta_yaw/ds
+        diagnostics.append((index, ds, delta_yaw, curvature,
+                            math.atan(float(wheelbase)*curvature)))
+    return tuple(diagnostics)
+
+
+def route_yaw_tangent_errors(route):
+    """Return signed CSV-yaw errors against position-derived route tangents.
+
+    The route CSV records the forward (outgoing) segment heading at each
+    waypoint.  The final waypoint is compared with its incoming segment.
+    This convention distinguishes a corrupt yaw column from curvature that
+    is already present in the waypoint coordinates.
+    """
+    if len(route) < 2:
+        return ()
+    errors = []
+    for index, point in enumerate(route):
+        if index < len(route)-1:
+            following = route[index+1]
+            tangent = math.atan2(following.y-point.y, following.x-point.x)
+        else:
+            previous = route[index-1]
+            tangent = math.atan2(point.y-previous.y, point.x-previous.x)
+        error = math.atan2(math.sin(point.yaw-tangent),
+                           math.cos(point.yaw-tangent))
+        errors.append((index, tangent, error))
+    return tuple(errors)
+
+
+def minimum_quintic_transition_length(lateral_shift, max_curvature):
+    """Conservative straight-road length for a zero-slope quintic shift.
+
+    The blend's maximum absolute second derivative is ``10*sqrt(3)/3``.
+    The exact planar
+    curvature has the additional denominator ``(1+d'^2)^1.5 >= 1``, so this
+    is a safe upper-bound inversion rather than a fitted tuning constant.
+    """
+    if max_curvature <= 0.0:
+        raise ValueError('max_curvature must be positive')
+    return math.sqrt(
+        abs(float(lateral_shift))*(10.0*math.sqrt(3.0)/3.0)/max_curvature)
 
 
 def project_route(route, x, y, minimum_index=0):
@@ -93,7 +149,8 @@ def project_route(route, x, y, minimum_index=0):
     return best
 
 
-def interpolate_route(route, lengths, s):
+def interpolate_route_legacy_hermite(route, lengths, s):
+    """Previous CSV-yaw Hermite interpolation retained for diagnostics."""
     s = max(0.0, min(s, lengths[-1]))
     index = 0
     while index < len(lengths)-2 and lengths[index+1] < s:
@@ -101,11 +158,12 @@ def interpolate_route(route, lengths, s):
     first, second = route[index], route[index+1]
     span = max(1.0e-12, lengths[index+1]-lengths[index])
     ratio = (s-lengths[index])/span
-    # CSV yaw is the measured / generated route tangent.  A linear position
-    # interpolation discards it and turns every coarse waypoint into an
-    # instantaneous heading corner.  Cubic Hermite interpolation preserves
-    # both endpoint positions and tangents, so Frenet curvature represents
-    # the intended road instead of the CSV sampling interval.
+    # Cubic Hermite interpolation preserves the CSV endpoint yaws.  This is
+    # valid only when yaw is a smooth waypoint tangent.  Some generated CSVs
+    # instead store each *outgoing chord* heading; route_yaw_tangent_errors()
+    # detects that convention, while route_segment_steering() and the planner
+    # diagnostics expose any resulting curvature overshoot.  Never relax the
+    # steering limit to compensate for an infeasible reference interpolation.
     t2, t3 = ratio*ratio, ratio*ratio*ratio
     h00 = 2.0*t3-3.0*t2+1.0
     h10 = t3-2.0*t2+ratio
@@ -123,6 +181,28 @@ def interpolate_route(route, lengths, s):
     dy = dh00*first.y+dh10*m0y+dh01*second.y+dh11*m1y
     yaw = math.atan2(dy, dx)
     return x, y, yaw
+
+
+def interpolate_route(route, lengths, s):
+    """Interpolate the shared curvature-safe reference polyline.
+
+    Route follower publishes position-derived headings on a dense C2
+    B-spline reference.  Linear XY interpolation avoids applying a second
+    Hermite curve, while wrapped yaw interpolation keeps the Frenet normal
+    continuous between the same shared samples.
+    """
+    s = max(0.0, min(s, lengths[-1]))
+    index = 0
+    while index < len(lengths)-2 and lengths[index+1] < s:
+        index += 1
+    first, second = route[index], route[index+1]
+    span = max(1.0e-12, lengths[index+1]-lengths[index])
+    ratio = (s-lengths[index])/span
+    yaw_delta = math.atan2(math.sin(second.yaw-first.yaw),
+                           math.cos(second.yaw-first.yaw))
+    return (first.x+ratio*(second.x-first.x),
+            first.y+ratio*(second.y-first.y),
+            first.yaw+ratio*yaw_delta)
 
 
 def quintic_blend(value):
@@ -282,7 +362,7 @@ def _build_path(route, current_pose, current_projection, obstacle_s_min,
     # footprint and inflated obstacle, decide how late the lateral transition
     # may finish. Forcing the offset to finish a half vehicle length before
     # the inflated front face shortened a 2 m trigger into ~1.5 m and rejected
-    # physically feasible <=25 deg S turns.
+    # physically feasible steering-limited S turns.
     outbound_end = obstacle_s_min
     hold_end = obstacle_s_max+half_length+longitudinal_safety
     transition_end = hold_end+return_length
@@ -325,10 +405,31 @@ def _build_path(route, current_pose, current_projection, obstacle_s_min,
     return tuple(Pose2(*point) for point in points), return_end
 
 
+def _reference_path(route, start_s, return_s, interval):
+    """Sample the unshifted interpolated CSV over a candidate's s range."""
+    lengths = route_lengths(route)
+    samples = max(2, math.ceil((return_s-start_s)/interval)+1)
+    points = []
+    for sample in range(samples):
+        s = min(return_s, start_s+sample*interval)
+        points.append(Pose2(*interpolate_route(route, lengths, s)))
+    return tuple(points)
+
+
+def _candidate_phase(s, outbound_end, hold_end, transition_end):
+    if s <= outbound_end:
+        return 'ENTRY'
+    if s <= hold_end:
+        return 'OBSTACLE_PASS'
+    if s <= transition_end:
+        return 'REJOIN'
+    return 'REFERENCE_EXTENSION'
+
+
 def plan_candidates(route, current_pose, obstacle_box, left_boundary,
                     right_boundary, vehicle_length=1.30, vehicle_width=0.78,
-                    center_offset=0.0, wheelbase=0.77,
-                    max_steering_rad=math.radians(25),
+                    center_offset=0.0, wheelbase=0.73,
+                    max_steering_rad=math.radians(22),
                     obstacle_safety_lateral=0.20,
                     obstacle_safety_longitudinal=0.15, curb_safety=0.08,
                     sample_interval=0.05, target_fractions=(0.25, 0.5, 0.75),
@@ -439,6 +540,36 @@ def plan_candidates(route, current_pose, obstacle_box, left_boundary,
                 candidate.collision_path_index = collision_detail[0]
                 candidate.collision_pose = collision_detail[1]
                 candidate.collision_target = collision_detail[2]
+            if path:
+                peak_index = max(
+                    range(len(curvatures)), key=lambda item: abs(curvatures[item]))
+                peak_s = min(return_s, projection.s+peak_index*sample_interval)
+                hold_end = (obstacle_s_max+vehicle_length/2.0+
+                            obstacle_safety_longitudinal)
+                transition_end = hold_end+return_length
+                candidate.peak_curvature_index = peak_index
+                candidate.peak_curvature_s = peak_s
+                candidate.peak_curvature_phase = _candidate_phase(
+                    peak_s, obstacle_s_min, hold_end, transition_end)
+                phase_items = {}
+                for index, curvature in enumerate(curvatures):
+                    sample_s = min(
+                        return_s, projection.s+index*sample_interval)
+                    phase = _candidate_phase(
+                        sample_s, obstacle_s_min, hold_end, transition_end)
+                    previous = phase_items.get(phase)
+                    if previous is None or abs(curvature) > abs(previous[2]):
+                        phase_items[phase] = (index, sample_s, curvature)
+                candidate.phase_curvature_peaks = tuple(
+                    (phase, index, sample_s, curvature,
+                     math.atan(wheelbase*curvature))
+                    for phase, (index, sample_s, curvature)
+                    in phase_items.items())
+                reference = _reference_path(
+                    route, projection.s, return_s, sample_interval)
+                candidate.reference_max_steering_rad = max(
+                    (abs(value) for value in steering_angles(reference, wheelbase)),
+                    default=0.0)
             if valid:
                 # Clearance dominates.  Longer return transitions are rewarded
                 # because the 20 Hz rate-limited follower can track them with

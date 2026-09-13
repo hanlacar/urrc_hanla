@@ -20,6 +20,6 @@ command_mux:
     mode_timeout_sec: 0.50
     stop_timeout_sec: 0.50
     publish_rate_hz: 20.0
-    wheel_limit_deg: 27
+    wheel_limit_deg: 22
     check_publisher_conflicts: true
     conflict_check_period_sec: 1.0

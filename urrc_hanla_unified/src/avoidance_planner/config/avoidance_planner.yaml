@@ -6,8 +6,8 @@ avoidance_coordinator:
     odom_topic: /odom
     reference_path_topic: /avoidance/route/reference_path
     target_frame: odom
-    planning_roi_x_min_m: 0.10
-    planning_roi_x_max_m: 7.00
+    planning_roi_x_min_m: -7.00
+    planning_roi_x_max_m: -0.10
     planning_roi_half_width_m: 1.30
     self_x_min_m: -0.75
     self_x_max_m: 0.75
@@ -43,8 +43,8 @@ avoidance_coordinator:
     vehicle_length_m: 1.30
     vehicle_width_m: 0.78
     vehicle_center_x_offset_m: 0.0
-    wheelbase_m: 0.77
-    max_steering_deg: 25.0
+    wheelbase_m: 0.73
+    max_steering_deg: 22.0
     obstacle_safety_lateral_m: 0.20
     obstacle_safety_longitudinal_m: 0.15
     minimum_obstacle_depth_m: 0.65
@@ -58,7 +58,7 @@ avoidance_coordinator:
     # Trigger distance is the reference-path travel from the current front
     # bumper to the first swept-footprint collision pose (not LiDAR range).
     collision_confirmation_frames: 3
-    front_lidar_x_offset_m: 0.65
+    front_lidar_x_offset_m: 0.73
     emergency_stop_distance_m: 0.5
     stopped_linear_speed_mps: 0.03
     stopped_angular_speed_rps: 0.03
@@ -79,3 +79,6 @@ avoidance_coordinator:
     odom_timeout_sec: 0.50
     # Static camera/GPS paths may be transient-local; zero disables aging.
     reference_path_timeout_sec: 0.0
+    # Diagnostic markers only; these parameters never alter planning output.
+    debug_visualization: false
+    publish_rejected_points: false

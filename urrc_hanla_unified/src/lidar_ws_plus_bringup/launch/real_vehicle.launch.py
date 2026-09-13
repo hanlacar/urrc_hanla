@@ -5,8 +5,8 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -27,6 +27,10 @@ def _validate(context):
         if front == rear:
             raise RuntimeError(
                 'front_serial_port and rear_serial_port must be different')
+    if (_as_bool(context, 'bench_fake_odom') and
+            not _as_bool(context, 'enable_mcu_simple_compat')):
+        raise RuntimeError(
+            'bench_fake_odom requires enable_mcu_simple_compat:=true')
     return []
 
 
@@ -46,6 +50,8 @@ def generate_launch_description():
     enable_motion_detector = LaunchConfiguration('enable_motion_detector')
     enable_avoidance = LaunchConfiguration('enable_avoidance')
     enable_mux = LaunchConfiguration('enable_mux')
+    enable_mcu_simple_compat = LaunchConfiguration(
+        'enable_mcu_simple_compat')
     front_frame = LaunchConfiguration('front_laser_frame')
     rear_frame = LaunchConfiguration('rear_laser_frame')
     base_frame = LaunchConfiguration('base_frame')
@@ -59,7 +65,36 @@ def generate_launch_description():
         DeclareLaunchArgument('enable_motion_detector', default_value='true'),
         DeclareLaunchArgument('enable_avoidance', default_value='false'),
         DeclareLaunchArgument('enable_mux', default_value='true'),
+        DeclareLaunchArgument(
+            'enable_mcu_simple_compat', default_value='false',
+            description='Bench-only legacy /lidar_* to SIMPLE MCU bridge.'),
+        DeclareLaunchArgument(
+            'bench_fake_odom', default_value='false',
+            description=(
+                'Publish periodic zero /odom and one static odom->base_link '
+                'only for lifted bench.')),
+        DeclareLaunchArgument(
+            'simple_wheel_sign_multiplier', default_value='-1',
+            description='Legacy /lidar_wheel to SIMPLE (+left) sign mapping.'),
+        DeclareLaunchArgument(
+            'left_curb_inner_y_m', default_value='1.095',
+            description='Production default; use 1.50 only on lifted bench.'),
+        DeclareLaunchArgument(
+            'right_curb_inner_y_m', default_value='-1.095',
+            description='Production default; use -1.50 only on lifted bench.'),
+        DeclareLaunchArgument(
+            'replan_trigger_distance_m', default_value='2.0',
+            description='Production default; use 3.5 only on lifted bench.'),
         DeclareLaunchArgument('use_rviz', default_value='false'),
+        DeclareLaunchArgument(
+            'debug_visualization', default_value='false',
+            description='Publish planner-only RViz diagnostic markers.'),
+        DeclareLaunchArgument(
+            'publish_rejected_points', default_value='false',
+            description='Publish valid scan returns outside the planner ROI.'),
+        DeclareLaunchArgument(
+            'launch_debug_rviz', default_value='false',
+            description='Launch the real obstacle-avoidance debug RViz view.'),
         DeclareLaunchArgument('route_file', default_value=''),
         DeclareLaunchArgument('avoidance_auto_start', default_value='false'),
         DeclareLaunchArgument(
@@ -85,7 +120,8 @@ def generate_launch_description():
         DeclareLaunchArgument('front_laser_z', default_value='0.105'),
         DeclareLaunchArgument('front_laser_roll', default_value='0.0'),
         DeclareLaunchArgument('front_laser_pitch', default_value='0.0'),
-        DeclareLaunchArgument('front_laser_yaw', default_value='0.0'),
+        DeclareLaunchArgument(
+            'front_laser_yaw', default_value='3.14159265359'),
         DeclareLaunchArgument('rear_laser_x', default_value='-0.680'),
         DeclareLaunchArgument('rear_laser_y', default_value='0.0'),
         DeclareLaunchArgument('rear_laser_z', default_value='0.155'),
@@ -172,8 +208,21 @@ def generate_launch_description():
                     avoidance_planner_share, 'config',
                     'avoidance_planner.yaml'),
                 {'use_sim_time': use_sim_time,
-                 'mode_topic': '/drive_mode',
-                 'reference_path_topic': '/dr_viz/reference_path'}]),
+                 'left_curb_inner_y_m': ParameterValue(
+                     LaunchConfiguration('left_curb_inner_y_m'),
+                     value_type=float),
+                 'right_curb_inner_y_m': ParameterValue(
+                     LaunchConfiguration('right_curb_inner_y_m'),
+                     value_type=float),
+                 'replan_trigger_distance_m': ParameterValue(
+                     LaunchConfiguration('replan_trigger_distance_m'),
+                     value_type=float),
+                 'debug_visualization': ParameterValue(
+                     LaunchConfiguration('debug_visualization'),
+                     value_type=bool),
+                 'publish_rejected_points': ParameterValue(
+                     LaunchConfiguration('publish_rejected_points'),
+                     value_type=bool)}]),
         Node(
             package='avoidance_route', executable='route_follower',
             name='route_follower', output='screen',
@@ -182,34 +231,54 @@ def generate_launch_description():
                     avoidance_route_share, 'config', 'route_follower.yaml'), {
                         'use_sim_time': use_sim_time,
                         'route_file': LaunchConfiguration('route_file'),
-                        'mode_topic': '/drive_mode',
-                        'reference_path_topic': '/dr_viz/reference_path',
-                        'auto_start': ParameterValue(
+                        'auto_start_avoidance': ParameterValue(
                             LaunchConfiguration('avoidance_auto_start'),
                             value_type=bool),
-                    }], remappings=[('/scan_front', '/front/scan')]),
+                    }]),
         Node(
             package='avoidance_lidar', executable='lidar_safety',
             name='lidar_safety', output='screen',
             condition=IfCondition(enable_avoidance), parameters=[
                 os.path.join(avoidance_lidar_share, 'config', 'safety.yaml'),
-                {'use_sim_time': use_sim_time,
-                 'mode_topic': '/drive_mode'}]),
-        Node(
+                {'use_sim_time': use_sim_time}]),
+    ]
+
+    normal_rviz = GroupAction(
+        condition=UnlessCondition(LaunchConfiguration('launch_debug_rviz')),
+        actions=[Node(
             package='rviz2', executable='rviz2', name='avoidance_rviz',
-            output='screen', condition=IfCondition(
-                LaunchConfiguration('use_rviz')),
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('use_rviz')),
             arguments=['-d', os.path.join(
                 avoidance_lidar_share, 'rviz', 'avoidance_lidar.rviz')],
-            parameters=[{'use_sim_time': use_sim_time}]),
-    ]
+            parameters=[{'use_sim_time': use_sim_time}])])
+    debug_rviz = Node(
+        package='rviz2', executable='rviz2', name='avoidance_debug_rviz',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('launch_debug_rviz')),
+        arguments=['-d', os.path.join(
+            share, 'real_avoidance_debug.rviz')],
+        parameters=[{'use_sim_time': use_sim_time}])
 
     mux = Node(
         package='lidar_ws_plus_bringup', executable='command_mux',
         name='command_mux', output='screen', condition=IfCondition(enable_mux),
         parameters=[os.path.join(share, 'config', 'command_mux.yaml'), {
             'use_sim_time': use_sim_time,
-            'mode_topic': '/drive_mode',
+        }])
+
+    simple_compat = Node(
+        package='lidar_ws_plus_bringup', executable='mcu_simple_compat',
+        name='mcu_simple_compat', output='screen',
+        condition=IfCondition(enable_mcu_simple_compat), parameters=[{
+            'use_sim_time': use_sim_time,
+            'wheel_sign_multiplier': ParameterValue(
+                LaunchConfiguration('simple_wheel_sign_multiplier'),
+                value_type=int),
+            'wheel_limit_deg': 22,
+            'max_forward_drive_level': 1,
+            'bench_fake_odom': ParameterValue(
+                LaunchConfiguration('bench_fake_odom'), value_type=bool),
         }])
 
     return LaunchDescription(declarations + [
@@ -224,5 +293,8 @@ def generate_launch_description():
             'rear_laser', enable_rear_tf),
         front_detector,
         *avoidance_nodes,
+        normal_rviz,
+        debug_rviz,
         mux,
+        simple_compat,
     ])
