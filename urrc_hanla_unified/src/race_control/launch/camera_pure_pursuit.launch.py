@@ -1,4 +1,6 @@
 import os
+import sys
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -26,16 +28,39 @@ def generate_launch_description():
             "color_fps": "60",
         }.items(),
     )
+    # Prefer a TensorRT engine when it exists with the dedicated runtime.
+    # On a new CPU-only computer fall back to the portable .pt model and the
+    # current Python interpreter so the integrated launch still starts YOLO.
+    home = Path.home()
+    model_candidates = [
+        Path(yolo_share) / "models" / "hanla_competition_11class_best_rtx5060_fp16.engine",
+        home / "urrc_hanla_full" / "race_autonomy" / "ros2_ws" / "src" /
+        "camera_yolo_inference" / "models" / "hanla_competition_11class_best.engine",
+        Path(yolo_share) / "models" / "hanla_competition_11class_best.pt",
+        home / "urrc_hanla_full" / "race_autonomy" / "ros2_ws" / "src" /
+        "camera_yolo_inference" / "models" / "hanla_competition_11class_best.pt",
+    ]
+    runtime_candidates = [
+        Path(yolo_share).parents[3] / ".yolo_runtime" / "bin" / "python",
+        home / "urrc_hanla_full" / "race_autonomy" / "ros2_ws" / ".yolo_runtime" / "bin" / "python",
+    ]
+    runtime = next((p for p in runtime_candidates if p.is_file()), Path(sys.executable))
+    engine_candidates = [p for p in model_candidates[:2] if p.is_file()]
+    pt_candidates = [p for p in model_candidates[2:] if p.is_file()]
+    use_engine = bool(engine_candidates) and runtime != Path(sys.executable)
+    if use_engine:
+        model_path = engine_candidates[0]
+    elif pt_candidates:
+        model_path = pt_candidates[0]
+    else:
+        model_path = model_candidates[-1]
     yolo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(yolo_share, "launch", "yolo_inference.launch.py")
         ),
         launch_arguments={
-            "python_executable": os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(yolo_share)))),
-                ".yolo_runtime", "bin", "python"),
-            "segmentation_model_path": os.path.join(
-                yolo_share, "models", "hanla_competition_11class_best_rtx5060_fp16.engine"),
+            "python_executable": str(runtime),
+            "segmentation_model_path": str(model_path),
             "input_width": "640",
             "input_height": "480",
             "inference_fps": "60.0",
@@ -44,8 +69,8 @@ def generate_launch_description():
             "navigation_bottom_exclusion_ratio": "0.0",
             "expected_image_width": "640",
             "expected_image_height": "480",
-            "device": "cuda:0",
-            "require_cuda": "true",
+            "device": "cuda:0" if use_engine else "cpu",
+            "require_cuda": "true" if use_engine else "false",
         }.items(),
     )
     planner = Node(

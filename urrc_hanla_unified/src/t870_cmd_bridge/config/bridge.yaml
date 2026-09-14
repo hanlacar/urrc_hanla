@@ -1,0 +1,43 @@
+t870_cmd_bridge:
+  ros__parameters:
+    # 입력 토픽은 이 두 개뿐.
+    drive_topic: "/cmd_drive"
+    wheel_topic: "/cmd_wheel"
+
+    port: "auto"
+    preferred_symlink: "/dev/t870_mcu"
+    baud: 115200
+    reset_wait_s: 2.0
+    reconnect_s: 1.0
+
+    # cmd_drive가 끊기면 반드시 0으로 내린다.
+    tx_hz: 10.0
+    drive_timeout_s: 0.5
+    firmware_drive_timeout_ms: 700
+    firmware_status_ms: 200
+
+    # 구동 stage -> PWM
+    reverse_pwm: 50
+    stage1_pwm: 50
+    stage2_pwm: 75
+    stage3_pwm: 100
+
+    # 조향 확정 기준
+    steer_center_adc: 484
+    steer_counts_per_deg: 18.0
+    max_steer_deg: 22
+    steer_pwm: 130
+    steer_tolerance_adc: 4
+    steer_settle_ms: 250
+    steer_fine_band_adc: 50
+    steer_fine_on_ms: 30
+    steer_fine_cycle_ms: 90
+    steer_timeout_ms: 5000
+
+    # 현재 차량 극성: 기존 v4 기준 유지
+    front_forward_level: 0
+    rear_forward_level: 0
+    steer_left_level: 1
+
+    # encA는 Arduino Mega D2, RISING only.
+    encoder_cpr: 163.0
