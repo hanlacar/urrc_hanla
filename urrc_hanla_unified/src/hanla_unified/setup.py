@@ -25,5 +25,6 @@ setup(
     entry_points={"console_scripts": [
         "mission_decision = hanla_unified.mission_decision_node:main",
         "csv_only_command = hanla_unified.csv_only_command_node:main",
+        "mcu_odom_adapter = hanla_unified.mcu_odom_adapter:main",
     ]},
 )

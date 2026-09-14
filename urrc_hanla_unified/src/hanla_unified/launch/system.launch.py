@@ -12,7 +12,11 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import (
+    AndSubstitution,
+    LaunchConfiguration,
+    NotSubstitution,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -134,6 +138,32 @@ def generate_launch_description():
         DeclareLaunchArgument("enable_mcu_simple_compat", default_value="true"),
         DeclareLaunchArgument("bench_fake_odom", default_value="false"),
         DeclareLaunchArgument(
+            "enable_mcu_odom_adapter", default_value="true",
+            description=(
+                "Real SIMPLE MCU wheel odometry; automatically disabled by "
+                "bench_fake_odom.")),
+        DeclareLaunchArgument(
+            "mcu_odom_counts_per_meter", default_value="199.8",
+            description="Initial estimate only; calibrate on the vehicle."),
+        DeclareLaunchArgument("mcu_odom_topic", default_value="/odom"),
+        DeclareLaunchArgument("mcu_odom_frame", default_value="odom"),
+        DeclareLaunchArgument("mcu_odom_base_frame", default_value="base_link"),
+        DeclareLaunchArgument("mcu_odom_wheelbase_m", default_value="0.73"),
+        DeclareLaunchArgument("mcu_odom_publish_tf", default_value="true"),
+        DeclareLaunchArgument(
+            "mcu_odom_encoder_topic", default_value="/mcu/encoder"),
+        DeclareLaunchArgument(
+            "mcu_odom_steering_topic", default_value="/mcu/steer_deg"),
+        DeclareLaunchArgument(
+            "mcu_odom_drive_topic", default_value="/mcu/applied_drive"),
+        DeclareLaunchArgument(
+            "mcu_odom_max_encoder_delta_counts", default_value="1000"),
+        DeclareLaunchArgument(
+            "mcu_odom_encoder_counts_are_signed", default_value="false",
+            description=(
+                "False for current monotonic ENC_A RISING firmware; true only "
+                "when encoder deltas already carry direction.")),
+        DeclareLaunchArgument(
             "simple_max_forward_drive_level", default_value="3",
             description=(
                 "Production SIMPLE limit; bench_fake_odom requires <= 1")),
@@ -208,6 +238,37 @@ def generate_launch_description():
              remappings=[("/lidar_drive", "/avoidance/drive_cmd"),
                          ("/lidar_wheel", "/avoidance/wheel_cmd"),
                          ("/lidar_stop", "/avoidance/stop_cmd")]),
+        Node(
+            package="hanla_unified", executable="mcu_odom_adapter",
+            name="mcu_odom_adapter", output="screen",
+            condition=IfCondition(AndSubstitution(
+                LaunchConfiguration("enable_mcu_odom_adapter"),
+                NotSubstitution(LaunchConfiguration("bench_fake_odom")))),
+            parameters=[{
+                "odom_topic": LaunchConfiguration("mcu_odom_topic"),
+                "odom_frame": LaunchConfiguration("mcu_odom_frame"),
+                "base_frame": LaunchConfiguration("mcu_odom_base_frame"),
+                "wheelbase_m": ParameterValue(
+                    LaunchConfiguration("mcu_odom_wheelbase_m"),
+                    value_type=float),
+                "counts_per_meter": ParameterValue(
+                    LaunchConfiguration("mcu_odom_counts_per_meter"),
+                    value_type=float),
+                "publish_tf": ParameterValue(
+                    LaunchConfiguration("mcu_odom_publish_tf"),
+                    value_type=bool),
+                "encoder_topic": LaunchConfiguration(
+                    "mcu_odom_encoder_topic"),
+                "steering_topic": LaunchConfiguration(
+                    "mcu_odom_steering_topic"),
+                "drive_topic": LaunchConfiguration("mcu_odom_drive_topic"),
+                "max_encoder_delta_counts": ParameterValue(
+                    LaunchConfiguration(
+                        "mcu_odom_max_encoder_delta_counts"), value_type=int),
+                "encoder_counts_are_signed": ParameterValue(
+                    LaunchConfiguration(
+                        "mcu_odom_encoder_counts_are_signed"), value_type=bool),
+            }]),
         Node(
             package="lidar_ws_plus_bringup", executable="mcu_simple_compat",
             name="integrated_mcu_simple_compat", output="screen",
