@@ -28,7 +28,10 @@ motion_detector_node:
     classify_roi_only: true
     publish_roi_filtered_points_only: false
 
-    # ROI is evaluated in base_link: +x forward, +y left.
+    # ROI is evaluated in base_link: +x forward, +y left. With
+    # use_lidar_tf_as_roi_origin, the front drive ROI starts at the TF-derived
+    # front_laser origin (not at base_link), and safety points are required to
+    # be in that sensor-relative forward hemisphere.
     front_angle_offset_deg: 0.0
     roi_angle_half_width_deg: 30.0
     roi_length_m: 1.5

@@ -5,10 +5,10 @@
 The front RPLIDAR A1 is physically mounted reversed (180 deg from the vehicle's
 actual front), the same situation the rear sensor already handles in
 rear_a1_motion_detector.launch.py. Following that design: the mounting flip is
-expressed once as a static TF (yaw=pi), and both the scan transform
-(use_tf_transform) and the ROI origin (use_lidar_tf_as_roi_origin, set in
-motion_detector.yaml) read that same TF, so scan points and the ROI marker stay
-aligned.
+expressed once as a static TF (yaw=pi). The detector uses that TF for scan
+points and the physical ROI origin; because points are in base_link, front
+drive safety still follows the vehicle's +x direction instead of reusing the
+scanner's inverted yaw.
 """
 
 from pathlib import Path

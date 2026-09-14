@@ -27,6 +27,8 @@
 namespace lidar_motion_detector
 {
 
+class MotionDetectorNodeTest;
+
 class MotionDetectorNode : public rclcpp::Node
 {
 public:
@@ -34,6 +36,8 @@ public:
     const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
+  friend class MotionDetectorNodeTest;
+
   void declareParameters();
   void loadParameters();
   void validateParameters();
@@ -90,6 +94,9 @@ private:
   bool isLocalPointInPolygon(double x, double y) const;
   double computeCurrentRoiCenterAngle() const;
   bool isPointInRoi(const Point2D & point) const;
+  bool isPointEligibleForDriveSafety(const Point2D & point) const;
+  bool usesFrontSensorSafetyGeometry() const;
+  double sensorOriginDistance(const Point2D & point) const;
   bool isPointInSectorRoi(const Point2D & point, double center_angle) const;
   bool isPointInCorridorRoi(const Point2D & point, double center_angle) const;
   double normalizeAngle(double angle_rad) const;
@@ -290,6 +297,7 @@ private:
   double nearest_stop_zone_distance_m_{-1.0};
   double nearest_red_yellow_zone_distance_m_{-1.0};
   double nearest_yellow_blue_zone_distance_m_{-1.0};
+  double nearest_forward_safety_distance_m_{-1.0};
 
   uint32_t next_track_id_{1U};
   bool stop_required_{false};
@@ -310,6 +318,10 @@ private:
   std::unordered_set<std::size_t> traversable_ramp_indices_;
   WarpedRoiGeometry warped_roi_geometry_;
   geometry_msgs::msg::TransformStamped scan_to_target_transform_;
+  // TF-derived scan-frame origin expressed in target_frame.  Front drive
+  // safety uses this as the origin of its forward hemisphere.
+  double scan_sensor_origin_x_{0.0};
+  double scan_sensor_origin_y_{0.0};
   double roi_origin_x_{0.0};
   double roi_origin_y_{0.0};
   double roi_heading_rad_{0.0};

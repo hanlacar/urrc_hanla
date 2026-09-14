@@ -46,4 +46,26 @@ install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch/ DESTINATION share/${PROJECT_NAME}/launch)
 install(DIRECTORY config/ DESTINATION share/${PROJECT_NAME}/config)
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(
+    test_drive_safety
+    test/test_drive_safety.cpp
+    src/motion_detector_node.cpp
+  )
+  target_include_directories(test_drive_safety PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_drive_safety
+    rclcpp
+    sensor_msgs
+    std_msgs
+    visualization_msgs
+    geometry_msgs
+    tf2
+    tf2_ros
+    tf2_geometry_msgs
+  )
+endif()
+
 ament_package()

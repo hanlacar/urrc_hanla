@@ -15,6 +15,8 @@
 #include "tf2/utils.hpp"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
+#include "lidar_motion_detector/drive_safety_geometry.hpp"
+
 namespace lidar_motion_detector
 {
 namespace
@@ -977,6 +979,16 @@ void MotionDetectorNode::onScan(
     active_output_frame_ = transform.header.frame_id;
   }
   scan_to_target_transform_ = transform;
+  scan_sensor_origin_x_ = 0.0;
+  scan_sensor_origin_y_ = 0.0;
+  if (std::isfinite(transform.transform.translation.x) &&
+    std::isfinite(transform.transform.translation.y))
+  {
+    // The scan frame origin transformed into the target frame is the single
+    // source of truth for the physical LiDAR position.
+    scan_sensor_origin_x_ = transform.transform.translation.x;
+    scan_sensor_origin_y_ = transform.transform.translation.y;
+  }
   roi_origin_x_ = 0.0;
   roi_origin_y_ = 0.0;
   roi_heading_rad_ = 0.0;
@@ -988,7 +1000,13 @@ void MotionDetectorNode::onScan(
     {
       roi_origin_x_ = transform.transform.translation.x;
       roi_origin_y_ = transform.transform.translation.y;
-      roi_heading_rad_ = normalizeAngle(transform_yaw);
+      // Points have already been transformed into target_frame (base_link).
+      // Drive safety therefore follows the vehicle's +x axis.  A front
+      // scanner may be mounted/inverted with yaw=pi; using that sensor-frame
+      // yaw here would make the ROI and longitudinal distances point
+      // backwards, even though the transformed points are in base_link.
+      // Keep the rear sensor's existing TF-oriented parking geometry intact.
+      roi_heading_rad_ = lidar_role_ == "front" ? 0.0 : normalizeAngle(transform_yaw);
     } else {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), logThrottleMilliseconds(),
@@ -1759,7 +1777,7 @@ void MotionDetectorNode::evaluateRampCandidates()
 
   for (std::size_t index = 0; index < latest_points_.size(); ++index) {
     const Point2D & point = latest_points_[index];
-    if (!point.in_roi) {
+    if (!point.in_roi || !isPointEligibleForDriveSafety(point)) {
       finish_run();
       continue;
     }
@@ -1868,6 +1886,27 @@ bool MotionDetectorNode::isPointInRoi(const Point2D & point) const
            lateral_error <= roi_config_.width_m * 0.5;
   }
   return isPointInSectorRoi(point, center_angle);
+}
+
+bool MotionDetectorNode::isPointEligibleForDriveSafety(
+  const Point2D & point) const
+{
+  // Parking-side consumers do not call this helper.  For the front detector,
+  // all drive-safety consumers share the same TF-derived sensor-origin
+  // hemisphere predicate; rear drive/parking behavior remains unchanged.
+  return lidar_role_ != "front" || isInForwardHemisphere(
+    point.x, point.y, scan_sensor_origin_x_, scan_sensor_origin_y_);
+}
+
+bool MotionDetectorNode::usesFrontSensorSafetyGeometry() const
+{
+  return lidar_role_ == "front" && is_normal_drive_;
+}
+
+double MotionDetectorNode::sensorOriginDistance(const Point2D & point) const
+{
+  return std::hypot(
+    point.x - scan_sensor_origin_x_, point.y - scan_sensor_origin_y_);
 }
 
 bool MotionDetectorNode::isPointInSectorRoi(
@@ -2004,6 +2043,153 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
       marker.lifetime = rclcpp::Duration::from_seconds(marker_lifetime_sec_);
       return marker;
     };
+  auto clip_drive_polygon = [this](
+      visualization_msgs::msg::Marker & marker)
+    {
+      if (lidar_role_ != "front" || marker.points.empty()) {
+        return;
+      }
+
+      std::vector<geometry_msgs::msg::Point> input = marker.points;
+      if (input.size() > 1U &&
+        input.front().x == input.back().x &&
+        input.front().y == input.back().y)
+      {
+        input.pop_back();
+      }
+      std::vector<geometry_msgs::msg::Point> clipped;
+      clipped.reserve(input.size() + 2U);
+      if (input.empty()) {
+        marker.points.clear();
+        return;
+      }
+      auto intersection = [this](
+          const geometry_msgs::msg::Point & start,
+          const geometry_msgs::msg::Point & end)
+        {
+          geometry_msgs::msg::Point point;
+          const double denominator = end.x - start.x;
+          const double fraction = std::abs(denominator) > 1.0e-12 ?
+            (scan_sensor_origin_x_ - start.x) / denominator : 0.0;
+          point.x = scan_sensor_origin_x_;
+          point.y = start.y + fraction * (end.y - start.y);
+          point.z = start.z + fraction * (end.z - start.z);
+          return point;
+        };
+      geometry_msgs::msg::Point previous = input.back();
+      bool previous_inside = previous.x >= scan_sensor_origin_x_;
+      for (const auto & current : input) {
+        const bool current_inside = current.x >= scan_sensor_origin_x_;
+        if (current_inside != previous_inside) {
+          clipped.push_back(intersection(previous, current));
+        }
+        if (current_inside) {
+          clipped.push_back(current);
+        }
+        previous = current;
+        previous_inside = current_inside;
+      }
+      if (!clipped.empty()) {
+        clipped.push_back(clipped.front());
+      }
+      marker.points = std::move(clipped);
+    };
+  auto clip_drive_segment = [this](
+      visualization_msgs::msg::Marker & marker)
+    {
+      if (lidar_role_ != "front" || marker.points.size() != 2U) {
+        return;
+      }
+      auto & start = marker.points[0];
+      auto & end = marker.points[1];
+      const bool start_inside = start.x >= scan_sensor_origin_x_;
+      const bool end_inside = end.x >= scan_sensor_origin_x_;
+      if (!start_inside && !end_inside) {
+        marker.points.clear();
+        return;
+      }
+      if (start_inside == end_inside) {
+        return;
+      }
+      const double fraction =
+        (scan_sensor_origin_x_ - start.x) / (end.x - start.x);
+      geometry_msgs::msg::Point intersection;
+      intersection.x = scan_sensor_origin_x_;
+      intersection.y = start.y + fraction * (end.y - start.y);
+      intersection.z = start.z + fraction * (end.z - start.z);
+      if (!start_inside) {
+        start = intersection;
+      } else {
+        end = intersection;
+      }
+    };
+  auto add_front_sensor_safety_markers =
+    [&marker_array, &make_line_marker, this]()
+    {
+      if (!usesFrontSensorSafetyGeometry()) {
+        return;
+      }
+
+      constexpr std::size_t kSafetyArcSegments = 48U;
+      constexpr double kForwardHalfAngle = kPi * 0.5;
+      geometry_msgs::msg::Point origin;
+      origin.x = scan_sensor_origin_x_;
+      origin.y = scan_sensor_origin_y_;
+      origin.z = 0.0;
+
+      auto add_sector = [
+        &marker_array, &make_line_marker, &origin,
+        kSafetyArcSegments, kForwardHalfAngle](
+          const int id, const char * marker_namespace, const double radius,
+          const float red, const float green, const float blue) {
+          auto marker = make_line_marker(id, marker_namespace, red, green, blue);
+          marker.points.reserve(kSafetyArcSegments + 3U);
+          marker.points.push_back(origin);
+          for (std::size_t index = 0; index <= kSafetyArcSegments; ++index) {
+            const double fraction = static_cast<double>(index) /
+              static_cast<double>(kSafetyArcSegments);
+            const double angle = -kForwardHalfAngle +
+              2.0 * kForwardHalfAngle * fraction;
+            geometry_msgs::msg::Point point;
+            point.x = origin.x + radius * std::cos(angle);
+            point.y = origin.y + radius * std::sin(angle);
+            point.z = 0.0;
+            marker.points.push_back(point);
+          }
+          marker.points.push_back(origin);
+          marker_array.markers.push_back(std::move(marker));
+        };
+
+      add_sector(10, "front_sensor_stop_zone", stop_zone_m_, 1.0F, 0.0F, 0.0F);
+
+      auto slow_marker = make_line_marker(
+        11, "front_sensor_slow_zone", 1.0F, 1.0F, 0.0F);
+      slow_marker.points.reserve(2U * (kSafetyArcSegments + 1U) + 1U);
+      for (std::size_t index = 0; index <= kSafetyArcSegments; ++index) {
+        const double fraction = static_cast<double>(index) /
+          static_cast<double>(kSafetyArcSegments);
+        const double angle = -kForwardHalfAngle +
+          2.0 * kForwardHalfAngle * fraction;
+        geometry_msgs::msg::Point point;
+        point.x = origin.x + slow_zone_m_ * std::cos(angle);
+        point.y = origin.y + slow_zone_m_ * std::sin(angle);
+        point.z = 0.0;
+        slow_marker.points.push_back(point);
+      }
+      for (std::size_t index = kSafetyArcSegments + 1U; index-- > 0U;) {
+        const double fraction = static_cast<double>(index) /
+          static_cast<double>(kSafetyArcSegments);
+        const double angle = -kForwardHalfAngle +
+          2.0 * kForwardHalfAngle * fraction;
+        geometry_msgs::msg::Point point;
+        point.x = origin.x + stop_zone_m_ * std::cos(angle);
+        point.y = origin.y + stop_zone_m_ * std::sin(angle);
+        point.z = 0.0;
+        slow_marker.points.push_back(point);
+      }
+      slow_marker.points.push_back(slow_marker.points.front());
+      marker_array.markers.push_back(std::move(slow_marker));
+    };
   const std::string drive_prefix = lidar_role_ == "rear" ? "rear_" : "";
 
   const bool role_can_show_parking = !parking_show_current_role_only_ ||
@@ -2077,7 +2263,9 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
       marker.points.push_back(point);
     }
     marker.points.push_back(origin);
+    clip_drive_polygon(marker);
     marker_array.markers.push_back(std::move(marker));
+    add_front_sensor_safety_markers();
     roi_marker_publisher_->publish(marker_array);
     return;
   }
@@ -2102,6 +2290,7 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
       outer_marker.points.push_back(to_global(
           warped_roi_geometry_.polygon.front()));
     }
+    clip_drive_polygon(outer_marker);
     marker_array.markers.push_back(std::move(outer_marker));
 
     auto interpolate_boundary = [this](
@@ -2126,7 +2315,7 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
       };
     auto add_warped_zone = [
       &marker_array, &make_line_marker, &interpolate_boundary, &to_global,
-      this](
+      &clip_drive_segment, this](
         const int id, const char * marker_namespace, const double arc,
         const float red, const float green, const float blue) {
         auto marker = make_line_marker(id, marker_namespace, red, green, blue);
@@ -2135,6 +2324,7 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
               warped_roi_geometry_.left_boundary, arc)));
         marker.points.push_back(to_global(interpolate_boundary(
               warped_roi_geometry_.right_boundary, arc)));
+        clip_drive_segment(marker);
         marker_array.markers.push_back(std::move(marker));
       };
     add_warped_zone(
@@ -2143,6 +2333,7 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
       3, (drive_prefix + "drive_zone2_slow").c_str(), currentSlowZone(), 1.0F, 1.0F, 0.0F);
     add_warped_zone(
       4, (drive_prefix + "drive_zone3_caution").c_str(), currentCautionZone(), 0.0F, 0.0F, 1.0F);
+    add_front_sensor_safety_markers();
     roi_marker_publisher_->publish(marker_array);
     return;
   }
@@ -2202,10 +2393,11 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
     outer_marker.points.push_back(edge_point(arc_length, -1.0));
   }
   outer_marker.points.push_back(edge_point(0.0, 1.0));
+  clip_drive_polygon(outer_marker);
   marker_array.markers.push_back(std::move(outer_marker));
 
   auto add_zone_boundary = [
-    &marker_array, &make_line_marker, &edge_point, this](
+    &marker_array, &make_line_marker, &edge_point, &clip_drive_segment, this](
       const int id, const char * marker_namespace, const double distance,
       const float red, const float green, const float blue)
     {
@@ -2215,6 +2407,7 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
       marker.points.reserve(2U);
       marker.points.push_back(edge_point(bounded_distance, 1.0));
       marker.points.push_back(edge_point(bounded_distance, -1.0));
+      clip_drive_segment(marker);
       marker_array.markers.push_back(std::move(marker));
     };
   add_zone_boundary(2, (drive_prefix + "drive_zone1_stop").c_str(), currentStopZone(), 1.0F, 0.0F, 0.0F);
@@ -2222,27 +2415,40 @@ void MotionDetectorNode::publishRoiMarker(const std_msgs::msg::Header & header)
   add_zone_boundary(
     4, (drive_prefix + "drive_zone3_caution").c_str(), currentCautionZone(), 0.0F, 0.0F, 1.0F);
 
+  add_front_sensor_safety_markers();
   roi_marker_publisher_->publish(marker_array);
 }
 
 RoiZoneCounts MotionDetectorNode::countRoiZonePoints() const
 {
   RoiZoneCounts counts{0U, 0U, 0U};
+  const bool front_sensor_safety = usesFrontSensorSafetyGeometry();
   for (const Point2D & point : latest_points_) {
-    if (!point.in_roi || !std::isfinite(point.roi_arc_length)) {
+    if (!isPointEligibleForDriveSafety(point))
+    {
       continue;
     }
     if (traversable_ramp_indices_.count(point.scan_index) > 0U) {
       continue;
     }
-    if (point.roi_arc_length < 0.0) {
+    // Emergency STOP/SLOW zones for front NORMAL_DRIVE are physical
+    // concentric sensor-origin zones.  Do not let the steering-warped ROI
+    // or its centerline progress move these zones.
+    const double distance = front_sensor_safety ? sensorOriginDistance(point) :
+      point.roi_arc_length;
+    if ((!front_sensor_safety && !point.in_roi) || !std::isfinite(distance) ||
+      distance < 0.0)
+    {
       continue;
     }
-    if (point.roi_arc_length <= currentStopZone()) {
+    if (front_sensor_safety ? distance <= stop_zone_m_ :
+      distance <= currentStopZone()) {
       ++counts.stop_points;
-    } else if (point.roi_arc_length <= currentSlowZone()) {
+    } else if (front_sensor_safety ? distance <= slow_zone_m_ :
+      distance <= currentSlowZone()) {
       ++counts.slow_points;
-    } else if (point.roi_arc_length <= currentCautionZone()) {
+    } else if (front_sensor_safety ? distance <= caution_zone_m_ :
+      distance <= currentCautionZone()) {
       ++counts.caution_points;
     }
   }
@@ -2266,11 +2472,18 @@ void MotionDetectorNode::updateRiskState(const std_msgs::msg::Header & header)
 
   const RoiZoneCounts counts = countRoiZonePoints();
   static_obstacle_held_ = false;
+  const bool front_sensor_safety = usesFrontSensorSafetyGeometry();
   if (static_obstacle_hold_enable_) {
     for (const auto & track : tracks_) {
       if (track.motion_class == MotionClass::STATIC) {
         for (const auto & point : track.points) {
-          if (point.in_roi) {static_obstacle_held_ = true; break;}
+          const bool in_drive_safety_region = front_sensor_safety ?
+            std::isfinite(sensorOriginDistance(point)) &&
+            sensorOriginDistance(point) <= caution_zone_m_ : point.in_roi;
+          if (in_drive_safety_region && isPointEligibleForDriveSafety(point)) {
+            static_obstacle_held_ = true;
+            break;
+          }
         }
       }
       if (static_obstacle_held_) {break;}
@@ -2486,6 +2699,8 @@ void MotionDetectorNode::updateDriveObstacleFlags()
   double nearest_stop = std::numeric_limits<double>::infinity();
   double nearest_red_yellow = std::numeric_limits<double>::infinity();
   double nearest_yellow_blue = std::numeric_limits<double>::infinity();
+  nearest_forward_safety_distance_m_ = -1.0;
+  const bool front_sensor_safety = usesFrontSensorSafetyGeometry();
   const auto apex = computeDriveRoiStartMidpoint();
   const double heading = computeDriveRoiHeadingRad();
   const double cosine = std::cos(heading);
@@ -2493,16 +2708,40 @@ void MotionDetectorNode::updateDriveObstacleFlags()
   auto longitudinal_distance = [&](const Point2D & point) {
       return (point.x - apex.x) * cosine + (point.y - apex.y) * sine;
     };
+  auto drive_safety_distance = [&](const Point2D & point) {
+      return front_sensor_safety ? sensorOriginDistance(point) :
+             longitudinal_distance(point);
+    };
+  auto eligible_drive_point = [&](const Point2D & point) {
+      if (!isPointEligibleForDriveSafety(point) ||
+        traversable_ramp_indices_.count(point.scan_index) > 0U)
+      {
+        return false;
+      }
+      // Front NORMAL_DRIVE safety is the complete sensor-origin forward
+      // hemisphere, independent of steering-warped ROI membership.  Rear and
+      // non-normal behavior retain the existing ROI contract.
+      return front_sensor_safety || point.in_roi;
+    };
   for (const auto & point : latest_points_) {
-    if (!point.in_roi || traversable_ramp_indices_.count(point.scan_index) > 0U) {continue;}
-    const double s = longitudinal_distance(point);
-    if (s < 0.0 || s > caution_zone_m_) {continue;}
-    if (s <= stop_zone_m_) {
-      ++stop_count; nearest_stop = std::min(nearest_stop, s);
-    } else if (s <= slow_zone_m_) {
-      ++red_yellow_count; nearest_red_yellow = std::min(nearest_red_yellow, s);
+    if (!eligible_drive_point(point))
+    {
+      continue;
+    }
+    const double distance = drive_safety_distance(point);
+    if (!std::isfinite(distance) || distance < 0.0) {continue;}
+    if (front_sensor_safety) {
+      nearest_forward_safety_distance_m_ =
+        nearest_forward_safety_distance_m_ < 0.0 ? distance :
+        std::min(nearest_forward_safety_distance_m_, distance);
+    }
+    if (distance > caution_zone_m_) {continue;}
+    if (distance <= stop_zone_m_) {
+      ++stop_count; nearest_stop = std::min(nearest_stop, distance);
+    } else if (distance <= slow_zone_m_) {
+      ++red_yellow_count; nearest_red_yellow = std::min(nearest_red_yellow, distance);
     } else {
-      ++yellow_blue_count; nearest_yellow_blue = std::min(nearest_yellow_blue, s);
+      ++yellow_blue_count; nearest_yellow_blue = std::min(nearest_yellow_blue, distance);
     }
   }
   zone1_obstacle_detected_ = stop_count >= static_cast<std::size_t>(min_stop_points_);
@@ -2520,17 +2759,17 @@ void MotionDetectorNode::updateDriveObstacleFlags()
   for (const auto & track : tracks_) {
     if (track.motion_class != MotionClass::STATIC) {continue;}
     for (const auto & point : track.points) {
-      if (!point.in_roi ||
-        traversable_ramp_indices_.count(point.scan_index) > 0U)
+      if (!eligible_drive_point(point))
       {
         continue;
       }
       static_scan_indices.insert(point.scan_index);
-      const double s = longitudinal_distance(point);
-      if (s < 0.0 || s > caution_zone_m_) {continue;}
-      if (s <= stop_zone_m_) {
+      const double distance = drive_safety_distance(point);
+      if (!std::isfinite(distance) || distance < 0.0 ||
+        distance > caution_zone_m_) {continue;}
+      if (distance <= stop_zone_m_) {
         static_obstacle_in_zone1_ = true;
-      } else if (s <= slow_zone_m_) {
+      } else if (distance <= slow_zone_m_) {
         static_obstacle_in_zone2_ = true;
       } else {
         static_obstacle_in_zone3_ = true;
@@ -2538,15 +2777,16 @@ void MotionDetectorNode::updateDriveObstacleFlags()
     }
   }
   for (const auto & point : latest_points_) {
-    if (!point.in_roi || traversable_ramp_indices_.count(point.scan_index) > 0U ||
+    if (!eligible_drive_point(point) ||
       static_scan_indices.count(point.scan_index) > 0U)
     {
       continue;
     }
-    const double s = longitudinal_distance(point);
-    if (s > stop_zone_m_ && s <= slow_zone_m_) {
+    const double distance = drive_safety_distance(point);
+    if (!std::isfinite(distance) || distance < 0.0) {continue;}
+    if (distance > stop_zone_m_ && distance <= slow_zone_m_) {
       dynamic_obstacle_in_zone2_ = true;
-    } else if (s > slow_zone_m_ && s <= caution_zone_m_) {
+    } else if (distance > slow_zone_m_ && distance <= caution_zone_m_) {
       dynamic_obstacle_in_zone3_ = true;
     }
   }
@@ -2763,6 +3003,8 @@ void MotionDetectorNode::publishModeAndFinalState()
        << ",\"nearest_stop_zone_distance_m\":" << nearest_stop_zone_distance_m_
        << ",\"nearest_red_yellow_zone_distance_m\":" << nearest_red_yellow_zone_distance_m_
        << ",\"nearest_yellow_blue_zone_distance_m\":" << nearest_yellow_blue_zone_distance_m_
+       << ",\"nearest_forward_safety_distance_m\":" <<
+          nearest_forward_safety_distance_m_
        << ",\"tf_error\":" << (tf_error_ ? "true" : "false")
        << ",\"raw_lidar_drive\":" << raw_lidar_drive_
        << ",\"stable_lidar_drive\":" << stable_lidar_drive_
