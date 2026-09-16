@@ -5,7 +5,12 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    GroupAction,
+    LogInfo,
+    OpaqueFunction,
+)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -110,6 +115,7 @@ def generate_launch_description():
         DeclareLaunchArgument('scan_mode', default_value='Sensitivity'),
         DeclareLaunchArgument('front_laser_frame', default_value='front_laser'),
         DeclareLaunchArgument('rear_laser_frame', default_value='rear_laser'),
+        DeclareLaunchArgument('rear_scan_topic', default_value='/rear/scan'),
         DeclareLaunchArgument('base_frame', default_value='base_link'),
         DeclareLaunchArgument('front_laser_inverted', default_value='true'),
         DeclareLaunchArgument('front_laser_flip_x_axis', default_value='false'),
@@ -161,7 +167,7 @@ def generate_launch_description():
                 LaunchConfiguration('rear_laser_inverted'), value_type=bool),
             'flip_x_axis': ParameterValue(
                 LaunchConfiguration('rear_laser_flip_x_axis'), value_type=bool),
-            'topic_name': '/rear/scan',
+            'topic_name': LaunchConfiguration('rear_scan_topic'),
         }])
 
     def static_tf(name, frame, prefix, condition):
@@ -283,6 +289,12 @@ def generate_launch_description():
 
     return LaunchDescription(declarations + [
         OpaqueFunction(function=_validate),
+        LogInfo(msg=[
+            'LiDAR config: front_enabled=', enable_lidar,
+            ' front_port=', LaunchConfiguration('front_serial_port'),
+            ' rear_enabled=', enable_rear_lidar,
+            ' rear_port=', LaunchConfiguration('rear_serial_port'),
+        ]),
         front_lidar,
         rear_lidar,
         static_tf(
