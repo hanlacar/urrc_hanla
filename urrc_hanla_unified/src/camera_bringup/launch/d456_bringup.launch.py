@@ -95,7 +95,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "color_fps",
-            default_value="60",
+            default_value="30",
             description="RGB frames per second",
         ),
         OpaqueFunction(function=_launch_setup),

@@ -180,6 +180,7 @@ def _startup_preflight_exited(event, context):
 
 
 def generate_launch_description():
+    share = get_package_share_directory('t_parking_sim')
     default_map = os.path.join(share, 'maps', 'combined_parking_map_real_vehicle.yaml')
     graph_preflight = ExecuteProcess(
         cmd=[

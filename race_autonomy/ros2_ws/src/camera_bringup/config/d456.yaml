@@ -4,7 +4,7 @@
     enable_infra1: false
     enable_infra2: false
     enable_color: true
-    rgb_camera.color_profile: "640x480x60"
+    rgb_camera.color_profile: "640x480x30"
     rgb_camera.color_format: "RGB8"
     rgb_camera.enable_auto_exposure: true
     color_qos: "SENSOR_DATA"
@@ -12,7 +12,7 @@
     # separate rgb_camera.enable_auto_gain launch parameter.
     # 정지선 거리는 aligned Depth만 사용한다.
     enable_depth: true
-    depth_module.depth_profile: "640x480x15"
+    depth_module.depth_profile: "424x240x30"
     depth_qos: "SENSOR_DATA"
     enable_infra: false
     enable_infra1: false

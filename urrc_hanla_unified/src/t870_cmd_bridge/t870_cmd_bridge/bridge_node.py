@@ -41,9 +41,11 @@ class T870CmdBridge(Node):
     def __init__(self):
         super().__init__('t870_cmd_bridge')
 
-        # Topics: exactly two command subscriptions.
-        self.declare_parameter('drive_topic', '/cmd_drive')
-        self.declare_parameter('wheel_topic', '/cmd_wheel')
+        # Final SIMPLE command topics. mcu_simple_compat is the only upstream
+        # owner and performs the unit/sign conversion and steering fail-safe.
+        self.declare_parameter('drive_topic', '/mcu/cmd_drive')
+        self.declare_parameter('wheel_topic', '/mcu/cmd_wheel')
+        self.declare_parameter('stop_topic', '/mcu/cmd_stop')
 
         self.declare_parameter('port', 'auto')
         self.declare_parameter('preferred_symlink', '/dev/t870_mcu')
@@ -58,7 +60,7 @@ class T870CmdBridge(Node):
         self.declare_parameter('stage2_pwm', 75)
         self.declare_parameter('stage3_pwm', 100)
 
-        self.declare_parameter('steer_center_adc', 484)
+        self.declare_parameter('steer_center_adc', 496)
         self.declare_parameter('steer_counts_per_deg', 18.0)
         self.declare_parameter('max_steer_deg', 22)
         self.declare_parameter('steer_pwm', 130)
@@ -78,6 +80,7 @@ class T870CmdBridge(Node):
         p = lambda k: self.get_parameter(k).value
         self.drive_topic = str(p('drive_topic'))
         self.wheel_topic = str(p('wheel_topic'))
+        self.stop_topic = str(p('stop_topic'))
         self.port_param = str(p('port'))
         self.preferred_symlink = str(p('preferred_symlink'))
         self.baud = int(p('baud'))
@@ -115,12 +118,15 @@ class T870CmdBridge(Node):
         self.cmd_drive = 0
         self.last_drive_rx = None
         self.last_wheel_cmd = 0
+        self.stop_active = True
         self.last_enc = None
         self.last_enc_t = None
 
-        # ONLY TWO command subscriptions.
+        # This is the only serial command sink. Safety stop is independent of
+        # the drive watchdog and always wins.
         self.create_subscription(Float32, self.drive_topic, self.cb_drive, 10)
         self.create_subscription(Int32, self.wheel_topic, self.cb_wheel, 10)
+        self.create_subscription(Bool, self.stop_topic, self.cb_stop, 10)
 
         # Feedback only.
         self.pub_connected = self.create_publisher(Bool, '/mcu/connected', 10)
@@ -140,9 +146,10 @@ class T870CmdBridge(Node):
         self.create_timer(self.tx_period, self.tx_tick)
 
         self.get_logger().info(
-            f'INPUT ONLY: {self.drive_topic} (Float32), {self.wheel_topic} (Int32)')
+            f'INPUT ONLY: {self.drive_topic} (Float32), '
+            f'{self.wheel_topic} (Int32), {self.stop_topic} (Bool)')
         self.get_logger().info(
-            'No manager / no mode / no arbitration / no automatic drive / no cmd_stop subscription')
+            'No manager / no mode / no arbitration / no automatic drive')
         self.get_logger().info(
             f'steer: center={self.center_adc}, +LEFT/-RIGHT, clamp ±{self.max_deg}deg')
         self.get_logger().info('drive encoder: ENC_A Arduino Mega D2, RISING only, debounce 200us')
@@ -256,7 +263,7 @@ class T870CmdBridge(Node):
 
         now = time.monotonic()
         fresh = self.last_drive_rx is not None and now - self.last_drive_rx <= self.drive_timeout_s
-        stage = self.cmd_drive if fresh else 0
+        stage = self.cmd_drive if (fresh and not self.stop_active) else 0
         self.send(f'D,{self.stage_to_pwm(stage)}')
         self.publish_applied_drive(stage)
 
@@ -276,10 +283,21 @@ class T870CmdBridge(Node):
     def cb_wheel(self, msg):
         deg = max(-self.max_deg, min(self.max_deg, int(msg.data)))
         self.last_wheel_cmd = deg
-        if self.ready:
+        if self.ready and not self.stop_active:
             self.send(f'W,{deg}')
             m = Int32(); m.data = deg
             self.pub_applied_wheel.publish(m)
+
+    def cb_stop(self, msg):
+        requested = bool(msg.data)
+        if requested and not self.stop_active:
+            self.stop_active = True
+            self.last_drive_rx = None
+            if self.ready:
+                self.send('X')
+                self.send('D,0')
+        elif not requested and self.stop_active:
+            self.stop_active = False
 
     def handle_line(self, text):
         if text.startswith('STAT,'):
@@ -333,8 +351,8 @@ class T870CmdBridge(Node):
     def shutdown(self):
         if self.ser is not None:
             try:
-                self.send('D,0')
                 self.send('X')
+                self.send('D,0')
                 self.send('DISARM')
             except Exception:
                 pass

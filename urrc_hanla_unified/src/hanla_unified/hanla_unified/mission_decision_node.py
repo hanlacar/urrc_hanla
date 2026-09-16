@@ -21,7 +21,7 @@ class MissionDecisionNode(Node):
             "source_timeout_sec": 0.5, "camera_confidence_min": 0.8,
             "maximum_speed_mps": 0.70, "maximum_steering_deg": 22.0,
             "stage_1_speed_mps": 0.229, "stage_2_speed_mps": 0.455,
-            "stage_3_speed_mps": 0.70, "lidar_steering_sign": -1.0,
+            "stage_3_speed_mps": 0.70, "lidar_steering_sign": 1.0,
             "maximum_steering_rate_deg_s": 45.0,
             "slope_hold_sec": 3.0, "exit_hold_sec": 5.0,
         }

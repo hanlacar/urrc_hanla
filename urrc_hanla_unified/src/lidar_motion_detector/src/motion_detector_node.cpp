@@ -229,7 +229,7 @@ void MotionDetectorNode::declareParameters()
     "max_roi_center_shift_deg", kDefaultMaxRoiCenterShiftDeg);
   declare_parameter<double>("default_steering_angle_deg", 0.0);
   declare_parameter<double>("steering_sign", 1.0);
-  declare_parameter<double>("wheelbase_m", 0.33);
+  declare_parameter<double>("wheelbase_m", 0.73);
   declare_parameter<double>("steering_deadband_deg", 3.0);
   declare_parameter<double>("max_steering_angle_deg", 30.0);
   declare_parameter<bool>("use_warped_rectangle_roi", true);
@@ -643,7 +643,7 @@ void MotionDetectorNode::validateParameters()
     reset_double(steering_sign_, 1.0, "steering_sign");
   }
   if (!std::isfinite(wheelbase_m_) || wheelbase_m_ <= 0.0) {
-    reset_double(wheelbase_m_, 0.33, "wheelbase_m");
+    reset_double(wheelbase_m_, 0.73, "wheelbase_m");
   }
   if (!std::isfinite(steering_deadband_rad_) || steering_deadband_rad_ < 0.0) {
     reset_double(steering_deadband_rad_, 3.0 * kDegToRad, "steering_deadband_deg");

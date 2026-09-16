@@ -1,4 +1,4 @@
-"""Start camera, LiDAR, DR, and integrated decision (MCU is separate)."""
+"""Start one camera/LiDAR/DR stack and integrated decision (MCU is separate)."""
 
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
@@ -34,13 +34,10 @@ def validate(context):
     dr_enabled = LaunchConfiguration("enable_dr").perform(context).lower() in truthy
     if t_enabled and p_enabled:
         raise RuntimeError("T parking and parallel parking cannot run together")
-    route_csv = LaunchConfiguration("dr_route_csv").perform(context).strip()
-    route_choice = LaunchConfiguration("dr_route_choice").perform(context).strip().lower()
-    if dr_enabled and not route_csv and route_choice not in ("a-c", "a-d", "b-c", "b-d"):
-        raise RuntimeError(
-            "enable_dr:=true requires dr_route_choice:=a-c|a-d|b-c|b-d "
-            "or dr_route_csv:=/absolute/route.csv"
-        )
+    start_segment = LaunchConfiguration("dr_start_segment").perform(
+        context).strip().upper()
+    if dr_enabled and start_segment not in ("START_A", "START_B"):
+        raise RuntimeError("dr_start_segment must be START_A or START_B")
     if (t_enabled or p_enabled) and not LaunchConfiguration("parking_map").perform(context).strip():
         raise RuntimeError("parking mode requires parking_map:=/absolute/map.yaml")
     bench_fake_odom = LaunchConfiguration("bench_fake_odom").perform(
@@ -57,45 +54,46 @@ def validate(context):
     return []
 
 
-def launch_dr_follower(context, share, mission_share):
-    truthy = ("1", "true", "yes", "on")
-    if LaunchConfiguration("enable_dr").perform(context).lower() not in truthy:
+def launch_dr_follower(context, mission_share):
+    if LaunchConfiguration("enable_dr").perform(context).lower() not in (
+            "1", "true", "yes", "on"):
         return []
 
     route_csv = LaunchConfiguration("dr_route_csv").perform(context).strip()
     if route_csv:
         route = Path(route_csv).expanduser()
     else:
-        choice = LaunchConfiguration("dr_route_choice").perform(context).strip().lower()
-        route = share / "routes" / f"{choice}_dr.csv"
+        route = mission_share / "routes" / "route_network_segmented_10.csv"
     if not route.is_file():
-        raise RuntimeError(f"DR route CSV not found: {route}")
+        raise RuntimeError(f"segmented DR network CSV not found: {route}")
 
-    nodes = [
+    return [
         Node(
-            package="mission_manager", executable="dr_route_follower",
-            name="dr_route_follower", output="screen",
-            parameters=[{"route_path": str(route), "odom_topic": "/odom",
-                         "drive_topic": "/gps_drive", "wheel_topic": "/gps_wheel",
-                         "max_steer_deg": 22.0,
-                         "steering_sign": -1,
-                         "auto_start": LaunchConfiguration("dr_auto_start")}],
-        ),
-        Node(
-            package="mission_manager", executable="dr_route_visualizer",
-            name="dr_route_visualizer", output="screen",
-            parameters=[{"route_path": str(route), "odom_topic": "/odom",
-                         "status_topic": "/dr_navigation/status",
-                         "frame_id": "odom", "align_route_to_start": True}],
+            package="mission_manager",
+            executable="dr_real_segmented_follower",
+            name="dr_real_segmented_follower",
+            output="screen",
+            parameters=[{
+                "network_path": str(route),
+                "start_segment": LaunchConfiguration("dr_start_segment"),
+                "auto_start": LaunchConfiguration("dr_auto_start"),
+                "fixed_t_branch": LaunchConfiguration("dr_fixed_t_branch"),
+                "fixed_v_branch": LaunchConfiguration("dr_fixed_v_branch"),
+                "fixed_end_branch": LaunchConfiguration(
+                    "dr_fixed_end_branch"),
+                "odom_topic": "/odom",
+                "gps_drive_topic": "/gps_drive",
+                "gps_wheel_topic": "/gps_wheel",
+                # Parking modes 7/10 are a separate mission-decision input;
+                # avoidance exclusively owns /avoidance/*.
+                "lidar_drive_topic": "/parking/drive_cmd",
+                "lidar_wheel_topic": "/parking/wheel_cmd",
+                "wheelbase_m": 0.73,
+                "max_steer_deg": 22.0,
+                "steering_sign": -1,
+            }],
         ),
     ]
-    if LaunchConfiguration("dr_launch_rviz").perform(context).lower() in truthy:
-        nodes.append(Node(
-            package="rviz2", executable="rviz2", name="dr_route_rviz",
-            output="screen",
-            arguments=["-d", str(mission_share / "rviz" / "dr_route_live.rviz")],
-        ))
-    return nodes
 
 
 def generate_launch_description():
@@ -112,17 +110,27 @@ def generate_launch_description():
         SetEnvironmentVariable("FASTRTPS_DEFAULT_PROFILES_FILE", str(fastdds_profile)),
         DeclareLaunchArgument("enable_camera", default_value="true"),
         DeclareLaunchArgument("enable_lidar", default_value="true"),
-        DeclareLaunchArgument("enable_dr", default_value="false"),
+        DeclareLaunchArgument("enable_dr", default_value="true"),
         DeclareLaunchArgument("enable_t_parking", default_value="false"),
         DeclareLaunchArgument("enable_parallel_parking", default_value="false"),
         DeclareLaunchArgument("parking_map", default_value=""),
-        DeclareLaunchArgument("dr_route_csv", default_value=""),
-        DeclareLaunchArgument("dr_route_choice", default_value="a-c",
-                              description="Bundled DR route: a-c, a-d, b-c, or b-d"),
-        DeclareLaunchArgument("dr_auto_start", default_value="true",
-                              description="Start following the DR route as soon as odometry arrives"),
-        DeclareLaunchArgument("dr_launch_rviz", default_value="true",
-                              description="Show CSV reference and actual odom paths in RViz"),
+        DeclareLaunchArgument(
+            "dr_route_csv", default_value="",
+            description=("Optional segmented route network CSV; defaults to "
+                         "mission_manager/route_network_segmented_10.csv")),
+        DeclareLaunchArgument("dr_start_segment", default_value="START_A"),
+        DeclareLaunchArgument("dr_fixed_t_branch", default_value=""),
+        DeclareLaunchArgument("dr_fixed_v_branch", default_value=""),
+        DeclareLaunchArgument("dr_fixed_end_branch", default_value=""),
+        DeclareLaunchArgument(
+            "dr_auto_start", default_value="false",
+            description="Keep false until /dr_route/start is called"),
+        DeclareLaunchArgument(
+            "commanded_speed_mps", default_value="0.0",
+            description="Camera controller target speed; zero is fail-safe"),
+        DeclareLaunchArgument(
+            "color_fps", default_value="30",
+            description="Stable D456 RGB frame rate"),
         DeclareLaunchArgument("front_lidar_port", default_value="/dev/ttyUSB0"),
         DeclareLaunchArgument("avoidance_route_file", default_value=""),
         DeclareLaunchArgument("avoidance_auto_start", default_value="false"),
@@ -143,8 +151,8 @@ def generate_launch_description():
                 "Real SIMPLE MCU wheel odometry; automatically disabled by "
                 "bench_fake_odom.")),
         DeclareLaunchArgument(
-            "mcu_odom_counts_per_meter", default_value="199.8",
-            description="Initial estimate only; calibrate on the vehicle."),
+            "mcu_odom_counts_per_meter", default_value="797.0",
+            description="Measured calibration for this vehicle."),
         DeclareLaunchArgument("mcu_odom_topic", default_value="/odom"),
         DeclareLaunchArgument("mcu_odom_frame", default_value="odom"),
         DeclareLaunchArgument("mcu_odom_base_frame", default_value="base_link"),
@@ -154,6 +162,9 @@ def generate_launch_description():
             "mcu_odom_encoder_topic", default_value="/mcu/encoder"),
         DeclareLaunchArgument(
             "mcu_odom_steering_topic", default_value="/mcu/steer_deg"),
+        DeclareLaunchArgument(
+            "mcu_odom_steering_valid_topic",
+            default_value="/mcu/steering_feedback_valid"),
         DeclareLaunchArgument(
             "mcu_odom_drive_topic", default_value="/mcu/applied_drive"),
         DeclareLaunchArgument(
@@ -171,6 +182,9 @@ def generate_launch_description():
         DeclareLaunchArgument("launch_rqt", default_value="true"),
         OpaqueFunction(function=validate),
         include("race_control", "course_autonomy.launch.py", {
+                    "commanded_speed_mps": LaunchConfiguration(
+                        "commanded_speed_mps"),
+                    "color_fps": LaunchConfiguration("color_fps"),
                     "launch_rqt": LaunchConfiguration("launch_rqt"),
                 },
                 condition=IfCondition(enable_camera)),
@@ -215,7 +229,7 @@ def generate_launch_description():
               )
          ],
         ),
-        OpaqueFunction(function=launch_dr_follower, args=[share, mission_share]),
+        OpaqueFunction(function=launch_dr_follower, args=[mission_share]),
         include("t_parking_sim", "real_t_parking.launch.py", {
             "map": LaunchConfiguration("parking_map"), "map_mode": "saved",
             "front_scan_topic": "/front/scan", "rear_scan_topic": "/rear/scan",
@@ -234,6 +248,10 @@ def generate_launch_description():
                  "initial_section": ParameterValue(
                      LaunchConfiguration("mission_initial_section"),
                      value_type=int),
+                 # Avoidance/parking already publish legacy positive-right.
+                 # Preserve that contract until mcu_simple_compat converts it
+                 # exactly once to the MCU's positive-left convention.
+                 "lidar_steering_sign": 1.0,
              }],
              remappings=[("/lidar_drive", "/avoidance/drive_cmd"),
                          ("/lidar_wheel", "/avoidance/wheel_cmd"),
@@ -261,6 +279,9 @@ def generate_launch_description():
                     "mcu_odom_encoder_topic"),
                 "steering_topic": LaunchConfiguration(
                     "mcu_odom_steering_topic"),
+                "steering_valid_topic": LaunchConfiguration(
+                    "mcu_odom_steering_valid_topic"),
+                "steering_feedback_required": True,
                 "drive_topic": LaunchConfiguration("mcu_odom_drive_topic"),
                 "max_encoder_delta_counts": ParameterValue(
                     LaunchConfiguration(
@@ -289,5 +310,9 @@ def generate_launch_description():
                 "publish_mode_5": False,
                 "bench_fake_odom": ParameterValue(
                     LaunchConfiguration("bench_fake_odom"), value_type=bool),
+                "steering_feedback_required": True,
+                "steering_feedback_center_adc": 496,
+                "steering_feedback_counts_per_deg": 18.0,
+                "steering_feedback_max_deg": 22.0,
             }]),
     ])

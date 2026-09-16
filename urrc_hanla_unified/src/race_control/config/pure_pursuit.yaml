@@ -1,7 +1,7 @@
 pure_pursuit:
   ros__parameters:
     path_topic: "/perception/local_path_json"
-    # Encoder calibration: 199.8 count/m, converted by the Arduino bridge.
+    # Encoder calibration: 797.0 count/m, converted by the Arduino bridge.
     speed_feedback_topic: "/vehicle/speed_mps"
     speed_feedback_is_rpm: false
     # Vehicle wheel specification: 0.26 m diameter.

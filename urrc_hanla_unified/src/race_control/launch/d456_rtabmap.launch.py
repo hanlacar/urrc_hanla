@@ -32,10 +32,12 @@ def setup(context):
             "rgb_camera.color_profile": "640x480x30",
             # Keep RGB at 30 Hz, but use the lower supported depth rate to
             # reduce USB bandwidth and avoid intermittent depth-start errors.
-            "depth_module.depth_profile": "640x480x15",
+            "depth_module.depth_profile": "424x240x30",
             "rgb_camera.color_format": "RGB8", "depth_module.depth_format": "Z16",
             "align_depth.enable": True, "enable_sync": True,
-            "enable_gyro": False, "enable_accel": False, "enable_motion": False,
+            "enable_gyro": True, "gyro_fps": 200,
+            "enable_accel": True, "accel_fps": 100,
+            "enable_motion": False,
             "pointcloud.enable": False, "publish_tf": False,
             "wait_for_device_timeout": 10.0}])
     base_tf=Node(package="tf2_ros", executable="static_transform_publisher",

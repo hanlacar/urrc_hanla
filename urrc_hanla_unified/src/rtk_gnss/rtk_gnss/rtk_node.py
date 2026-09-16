@@ -1,29 +1,28 @@
+import base64
+import math
+import socket
+import threading
+import time
 
+from geometry_msgs.msg import TwistWithCovarianceStamped
+import pynmea2
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix, NavSatStatus
-from geometry_msgs.msg import TwistWithCovarianceStamped
-
 import serial
-import socket
-import base64
-import threading
-import time
-import math
-import pynmea2
 
 
 # ===== 설정 =====
-PORT = "/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00"
+PORT = '/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00'
 BAUD = 38400
 
-NTRIP_HOST = "www.gnssdata.or.kr"
+NTRIP_HOST = 'www.gnssdata.or.kr'
 NTRIP_PORT = 2101
-MOUNTPOINT = "WSJG-RTCM32"
-NTRIP_USER = "db01040902325@gmail.com"
-NTRIP_PASS = "gnss"
+MOUNTPOINT = 'WSJG-RTCM32'
+NTRIP_USER = 'db01040902325@gmail.com'
+NTRIP_PASS = 'gnss'
 
-DEFAULT_GGA = "$GPGGA,000000.00,3532.70,N,12915.29,E,1,08,1.0,50.0,M,20.0,M,,*XX"
+DEFAULT_GGA = '$GPGGA,000000.00,3532.70,N,12915.29,E,1,08,1.0,50.0,M,20.0,M,,*XX'
 
 # GST 메시지 활성화 명령 (CFG-VALSET, RAM layer, CFG-MSGOUT-NMEA_ID_GST_USB=1)
 UBX_ENABLE_GST = bytes([
@@ -55,15 +54,15 @@ class RtkGnssNode(Node):
 
         # 시리얼 연결
         self.ser = serial.Serial(PORT, BAUD, timeout=1)
-        self.get_logger().info(f"[Serial] Connected to {PORT} @ {BAUD}")
+        self.get_logger().info(f'[Serial] Connected to {PORT} @ {BAUD}')
 
         # GST 메시지 출력 활성화 (위치 오차 표준편차)
         self.ser.write(UBX_ENABLE_GST)
-        self.get_logger().info("[Config] GST output enabled on USB")
+        self.get_logger().info('[Config] GST output enabled on USB')
 
         # 측정 주기 10Hz 상향
         self.ser.write(UBX_RATE_10HZ)
-        self.get_logger().info("[Config] Nav rate set to 10Hz")
+        self.get_logger().info('[Config] Nav rate set to 10Hz')
 
         # GST에서 받은 최신 오차 표준편차 [m] (아직 못 받았으면 None)
         self.std_lat = None
@@ -86,24 +85,24 @@ class RtkGnssNode(Node):
         self.ntrip_thread.start()
 
     def read_gps(self):
-        """GPS NMEA 읽기 → 파싱 → ROS2 토픽 퍼블리시"""
+        """GPS NMEA 읽기 → 파싱 → ROS2 토픽 퍼블리시."""
         while rclpy.ok():
             try:
                 line = self.ser.readline().decode(
-                    "ascii", errors="replace").strip()
+                    'ascii', errors='replace').strip()
 
                 # --- GGA: 위치 (NavSatFix) ---
-                if line.startswith("$GNGGA") or line.startswith("$GPGGA"):
+                if line.startswith('$GNGGA') or line.startswith('$GPGGA'):
                     with self.gga_lock:
                         self.latest_gga = line
                     self.publish_fix(line)
 
                 # --- RMC: 속도/헤딩 (TwistWithCovarianceStamped) ---
-                elif line.startswith("$GNRMC") or line.startswith("$GPRMC"):
+                elif line.startswith('$GNRMC') or line.startswith('$GPRMC'):
                     self.publish_vel(line)
 
                 # --- GST: 위치 오차 표준편차 (공분산용) ---
-                elif line.startswith("$GNGST") or line.startswith("$GPGST"):
+                elif line.startswith('$GNGST') or line.startswith('$GPGST'):
                     self.parse_gst(line)
 
             except Exception:
@@ -117,7 +116,7 @@ class RtkGnssNode(Node):
 
             fix = NavSatFix()
             fix.header.stamp = self.get_clock().now().to_msg()
-            fix.header.frame_id = "gps"
+            fix.header.frame_id = 'gps'
 
             # fix 품질 → NavSatStatus
             qual = int(msg.gps_qual)
@@ -180,18 +179,18 @@ class RtkGnssNode(Node):
 
             # fix 품질 바뀔 때만 로그
             if qual != self.last_fix:
-                names = {0: "No Fix", 1: "Standalone", 2: "DGPS",
-                         4: "RTK FIXED", 5: "RTK Float"}
+                names = {0: 'No Fix', 1: 'Standalone', 2: 'DGPS',
+                         4: 'RTK FIXED', 5: 'RTK Float'}
                 self.get_logger().info(
-                    f"[GPS] Fix:{qual} ({names.get(qual, qual)})  "
-                    f"Sats:{msg.num_sats}")
+                    f'[GPS] Fix:{qual} ({names.get(qual, qual)})  '
+                    f'Sats:{msg.num_sats}')
                 self.last_fix = qual
 
         except pynmea2.ParseError:
             pass
 
     def parse_gst(self, line):
-        """GST 문장에서 위도/경도/고도 오차 표준편차 추출"""
+        """GST 문장에서 위도/경도/고도 오차 표준편차 추출."""
         try:
             msg = pynmea2.parse(line)
             self.std_lat = float(msg.std_dev_latitude)
@@ -209,7 +208,7 @@ class RtkGnssNode(Node):
             vel = TwistWithCovarianceStamped()
             vel.header.stamp = self.get_clock().now().to_msg()
             # base_link 프레임: EKF가 body-frame twist로 소비
-            vel.header.frame_id = "base_link"
+            vel.header.frame_id = 'base_link'
 
             # 속도: knots → m/s
             speed_ms = float(msg.spd_over_grnd) * 0.514444
@@ -245,59 +244,59 @@ class RtkGnssNode(Node):
             pass
 
     def ntrip_client(self):
-        """NTRIP 캐스터 접속 → RTCM 수신 → ZED-F9P로 포워딩"""
+        """NTRIP 캐스터 접속 → RTCM 수신 → ZED-F9P로 포워딩."""
         while rclpy.ok():
             try:
                 self.get_logger().info(
-                    f"[NTRIP] Connecting to "
-                    f"{NTRIP_HOST}:{NTRIP_PORT}/{MOUNTPOINT}")
+                    f'[NTRIP] Connecting to '
+                    f'{NTRIP_HOST}:{NTRIP_PORT}/{MOUNTPOINT}')
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(10)
                 sock.connect((NTRIP_HOST, NTRIP_PORT))
 
-                userpass = f"{NTRIP_USER}:{NTRIP_PASS}"
+                userpass = f'{NTRIP_USER}:{NTRIP_PASS}'
                 auth = base64.b64encode(userpass.encode()).decode()
                 request = (
-                    f"GET /{MOUNTPOINT} HTTP/1.1\r\n"
-                    f"Host: {NTRIP_HOST}\r\n"
-                    f"Ntrip-Version: Ntrip/2.0\r\n"
-                    f"User-Agent: NTRIP PythonClient/1.0\r\n"
-                    f"Authorization: Basic {auth}\r\n"
-                    f"\r\n"
+                    f'GET /{MOUNTPOINT} HTTP/1.1\r\n'
+                    f'Host: {NTRIP_HOST}\r\n'
+                    f'Ntrip-Version: Ntrip/2.0\r\n'
+                    f'User-Agent: NTRIP PythonClient/1.0\r\n'
+                    f'Authorization: Basic {auth}\r\n'
+                    f'\r\n'
                 )
                 sock.send(request.encode())
 
                 response = sock.recv(4096)
-                if b"200" not in response and b"ICY 200 OK" not in response:
+                if b'200' not in response and b'ICY 200 OK' not in response:
                     self.get_logger().warn(
-                        f"[NTRIP] 접속 실패: {response[:120]}")
+                        f'[NTRIP] 접속 실패: {response[:120]}')
                     sock.close()
                     time.sleep(5)
                     continue
-                self.get_logger().info("[NTRIP] Connected! RTCM 수신 시작")
+                self.get_logger().info('[NTRIP] Connected! RTCM 수신 시작')
 
                 with self.gga_lock:
-                    sock.send((self.latest_gga + "\r\n").encode())
+                    sock.send((self.latest_gga + '\r\n').encode())
 
                 last_gga_send = time.time()
                 while rclpy.ok():
                     sock.settimeout(5)
                     data = sock.recv(4096)
                     if not data:
-                        self.get_logger().warn("[NTRIP] 연결 끊김, 재접속")
+                        self.get_logger().warn('[NTRIP] 연결 끊김, 재접속')
                         break
                     self.ser.write(data)  # RTCM → ZED-F9P
 
                     now = time.time()
                     if now - last_gga_send >= 10:
                         with self.gga_lock:
-                            sock.send((self.latest_gga + "\r\n").encode())
+                            sock.send((self.latest_gga + '\r\n').encode())
                         last_gga_send = now
 
                 sock.close()
             except Exception as e:
                 self.get_logger().error(
-                    f"[NTRIP] 오류: {e}, 5초 후 재접속")
+                    f'[NTRIP] 오류: {e}, 5초 후 재접속')
                 time.sleep(5)
 
 

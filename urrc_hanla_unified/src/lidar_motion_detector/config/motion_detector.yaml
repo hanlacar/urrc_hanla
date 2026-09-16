@@ -59,7 +59,7 @@ motion_detector_node:
     max_roi_center_shift_deg: 45.0
     default_steering_angle_deg: 0.0
     steering_sign: 1.0
-    wheelbase_m: 0.33
+    wheelbase_m: 0.73
     steering_deadband_deg: 3.0
     max_steering_angle_deg: 40.0
     use_warped_rectangle_roi: true

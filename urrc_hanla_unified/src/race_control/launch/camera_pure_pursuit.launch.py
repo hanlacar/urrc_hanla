@@ -25,28 +25,22 @@ def generate_launch_description():
         launch_arguments={
             "color_width": "640",
             "color_height": "480",
-            "color_fps": "60",
+            "color_fps": LaunchConfiguration("color_fps"),
         }.items(),
     )
     # Prefer a TensorRT engine when it exists with the dedicated runtime.
     # On a new CPU-only computer fall back to the portable .pt model and the
     # current Python interpreter so the integrated launch still starts YOLO.
-    home = Path.home()
     model_candidates = [
         Path(yolo_share) / "models" / "hanla_competition_11class_best_rtx5060_fp16.engine",
-        home / "urrc_hanla_full" / "race_autonomy" / "ros2_ws" / "src" /
-        "camera_yolo_inference" / "models" / "hanla_competition_11class_best.engine",
         Path(yolo_share) / "models" / "hanla_competition_11class_best.pt",
-        home / "urrc_hanla_full" / "race_autonomy" / "ros2_ws" / "src" /
-        "camera_yolo_inference" / "models" / "hanla_competition_11class_best.pt",
     ]
     runtime_candidates = [
         Path(yolo_share).parents[3] / ".yolo_runtime" / "bin" / "python",
-        home / "urrc_hanla_full" / "race_autonomy" / "ros2_ws" / ".yolo_runtime" / "bin" / "python",
     ]
     runtime = next((p for p in runtime_candidates if p.is_file()), Path(sys.executable))
-    engine_candidates = [p for p in model_candidates[:2] if p.is_file()]
-    pt_candidates = [p for p in model_candidates[2:] if p.is_file()]
+    engine_candidates = [p for p in model_candidates if p.suffix == ".engine" and p.is_file()]
+    pt_candidates = [p for p in model_candidates if p.suffix == ".pt" and p.is_file()]
     use_engine = bool(engine_candidates) and runtime != Path(sys.executable)
     if use_engine:
         model_path = engine_candidates[0]
@@ -125,6 +119,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("commanded_speed_mps",default_value="0.0",description="Pure Pursuit target speed; default is propulsion locked"),
+        DeclareLaunchArgument("color_fps", default_value="30", description="Stable D456 RGB frame rate"),
         DeclareLaunchArgument("speed_feedback_topic",default_value="/vehicle/speed_mps",description="Measured speed topic for dynamic lookahead"),
         DeclareLaunchArgument("launch_rqt", default_value="true"),
         LogInfo(msg="Camera + IMU + YOLO + metric path + Pure Pursuit; vehicle actuation is not launched"),

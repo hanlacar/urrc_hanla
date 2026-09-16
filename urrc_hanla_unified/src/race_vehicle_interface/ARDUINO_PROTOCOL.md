@@ -44,7 +44,7 @@ the A0 neutral reference.
 Current measured/assumed vehicle geometry:
 
 ```text
-wheelbase: 0.78 m
+wheelbase: 0.73 m (current MCU/vehicle authority)
 wheel diameter: 0.30 m (radius 0.15 m)
 maximum steering: +/-27 deg
 L1/R1 steering: approximately -/+9 deg until detailed angle calibration

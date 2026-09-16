@@ -38,8 +38,8 @@ class ControllerConfig:
     # Vehicle
     # ----------------------------------------------------------
 
-    wheelbase_m: float = 0.30
-    max_steering_deg: float = 27.0
+    wheelbase_m: float = 0.73
+    max_steering_deg: float = 22.0
     steering_sign: int = 1
 
     # ----------------------------------------------------------

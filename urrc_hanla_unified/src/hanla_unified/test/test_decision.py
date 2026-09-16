@@ -122,6 +122,23 @@ def test_system_launch_preserves_single_final_simple_mcu_chain():
     assert '"avoidance_left_curb_inner_y_m", default_value="1.095"' in launch
     assert '"avoidance_right_curb_inner_y_m", default_value="-1.095"' in launch
     assert '"avoidance_replan_trigger_distance_m", default_value="2.0"' in launch
+    assert launch.count('executable="dr_real_segmented_follower"') == 1
+    assert '"enable_dr", default_value="true"' in launch
+    assert '"dr_auto_start", default_value="false"' in launch
+    assert '"steering_feedback_center_adc": 496' in launch
+    assert '"lidar_steering_sign": 1.0' in launch
+
+
+def test_lidar_steering_is_converted_to_mcu_convention_exactly_once():
+    config = (Path(__file__).parents[1] / "config" /
+              "mission_decision.yaml").read_text()
+    route = (Path(__file__).parents[2] / "avoidance_route" /
+             "avoidance_route" / "route_follower.py").read_text()
+    compat = (Path(__file__).parents[2] / "lidar_ws_plus_bringup" /
+              "lidar_ws_plus_bringup" / "mcu_simple_compat.py").read_text()
+    assert "lidar_steering_sign: 1.0" in config
+    assert "wheel = int(round(-steering_deg))" in route
+    assert "'wheel_sign_multiplier': -1" in compat
 
 
 def test_mission_decision_owns_integrated_mode_echo():

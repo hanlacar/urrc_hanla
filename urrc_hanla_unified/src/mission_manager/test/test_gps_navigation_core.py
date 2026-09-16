@@ -174,7 +174,11 @@ def test_max27_visual_routes_use_natural_pure_pursuit(name, direction, drive, wh
     assert all(p.direction == direction and p.mode == "1" for p in circular.waypoints)
     assert math.hypot(circular.waypoints[0].x_m,
                       circular.waypoints[0].y_m) == pytest.approx(expected_radius, abs=1e-6)
-    controller = NavigationController(circular, ControllerConfig(steering_slowdown_deg=28.0))
+    # This archived visualization route intentionally models the old
+    # 0.30 m/27 deg geometry; production defaults are 0.73 m/22 deg.
+    controller = NavigationController(circular, ControllerConfig(
+        wheelbase_m=0.30, max_steering_deg=27.0,
+        steering_slowdown_deg=28.0))
     first = circular.waypoints[0]
     controller.set_position(first.x_m, first.y_m, 0.0)
     controller.set_imu(0.0, 0.0, True, 0.0)

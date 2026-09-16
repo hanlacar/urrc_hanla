@@ -1,5 +1,6 @@
 from pathlib import Path
 import pytest
+torch = pytest.importorskip("torch", reason="torch not installed in this build environment")
 from camera_yolo_inference.inference_backend import UltralyticsSegmentationBackend
 class Model:
     def __init__(self,task):self.task=task;self.names={0:"road"}

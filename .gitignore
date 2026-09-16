@@ -56,3 +56,17 @@ test_images_100/labels/
 !race_autonomy/ros2_ws/src/camera_yolo_inference/models/hanla_competition_11class_best.onnx
 !race_autonomy/ros2_ws/src/camera_yolo_inference/models/hanla_competition_11class_best.fp16.onnx
 !race_autonomy/ros2_ws/src/camera_yolo_inference/models/hanla_competition_11class_best.engine
+# credentials
+.env
+rtk_gnss/.env
+*.env
+!.env.example
+
+# backups & build
+*.bak
+*.20*.bak
+__pycache__/
+*.pyc
+build/
+install/
+log/

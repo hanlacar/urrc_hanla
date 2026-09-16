@@ -90,6 +90,41 @@ def test_reverse_steering_uses_bicycle_sign_convention():
     assert state.yaw < 0.0
 
 
+def test_invalid_steering_feedback_cannot_change_odom_yaw():
+    state = BicycleOdometry(
+        wheelbase_m=0.73,
+        counts_per_meter=797.0,
+        max_encoder_delta_counts=1000,
+        steering_feedback_required=True,
+    )
+    state.set_applied_drive(1.0)
+    state.set_steering_deg(-25.5)
+    baseline(state, count=0)
+    result = state.update_encoder(100, 2.0)
+    assert result.ds == pytest.approx(100.0 / 797.0)
+    assert result.dtheta == 0.0
+    assert state.yaw == 0.0
+    odom = make_odometry(
+        Time(sec=2), state, result, "odom", "base_link")
+    assert odom.pose.covariance[35] == pytest.approx(1.0e3)
+
+
+def test_validity_gate_enables_measured_steering_for_odom():
+    state = BicycleOdometry(
+        wheelbase_m=0.73,
+        counts_per_meter=797.0,
+        max_encoder_delta_counts=1000,
+        steering_feedback_required=True,
+    )
+    state.set_applied_drive(1.0)
+    state.set_steering_deg(10.0)
+    state.set_steering_valid(True)
+    baseline(state, count=0)
+    result = state.update_encoder(100, 2.0)
+    assert result.dtheta > 0.0
+    assert state.yaw > 0.0
+
+
 def test_monotonic_encoder_reset_is_rebaselined_without_pose_jump():
     state = integrator()
     state.set_applied_drive(1.0)
@@ -164,6 +199,8 @@ def test_system_launch_prevents_fake_and_real_odom_duplicates():
     assert "AndSubstitution(" in source
     assert 'NotSubstitution(LaunchConfiguration("bench_fake_odom"))' in source
     assert 'executable="mcu_odom_adapter"' in source
+    assert '"mcu_odom_counts_per_meter", default_value="797.0"' in source
+    assert '"steering_feedback_required": True' in source
 
     condition = IfCondition(AndSubstitution(
         LaunchConfiguration("enable_mcu_odom_adapter"),

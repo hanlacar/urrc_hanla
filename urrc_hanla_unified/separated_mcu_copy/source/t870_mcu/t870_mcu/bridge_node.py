@@ -265,7 +265,7 @@ class McuBridge(Node):
         self.declare_parameter("wheelbase_m", 0.73)
         self.declare_parameter("encoder_signed", False)
         #  엔코더 누적값이 1초에 이보다 많이 변하면 시리얼이 깨진 것으로 본다.
-        #  199.8 counts/m 기준 2000 = 10 m/s. 이 차의 최고속(약 0.8m/s)의 12배라
+        #  797 counts/m 기준 2000은 약 2.5 m/s로 현재 최고속보다 충분히 높아
         #  정상 주행은 절대 안 걸리고, 필드가 밀린 값만 걸러진다.
         #  0 으로 두면 이 검사를 끈다.
         self.declare_parameter("encoder_max_counts_per_s", 2000.0)

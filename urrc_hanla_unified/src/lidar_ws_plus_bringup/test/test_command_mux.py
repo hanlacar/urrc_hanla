@@ -3,13 +3,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 from geometry_msgs.msg import TransformStamped
 from lidar_ws_plus_bringup import mcu_simple_compat as compat
 from lidar_ws_plus_bringup.command_mux import (
     choose_output, select_source, SourceState, valid_drive)
 from lidar_ws_plus_bringup.mcu_simple_compat import (
-    make_bench_odometry, make_bench_static_transform, McuSimpleCompat,
-    translate_drive, translate_speed_mps, translate_wheel)
+    command_block_reason, make_bench_odometry, make_bench_static_transform,
+    McuSimpleCompat,
+    SteeringFeedbackGate, translate_drive, translate_speed_mps,
+    translate_wheel)
 from rclpy.time import Time
 from tf2_ros import Buffer
 
@@ -91,6 +94,56 @@ def test_integrated_speed_is_converted_to_calibrated_simple_levels():
 def test_float_wheel_input_fails_closed_when_non_finite():
     assert translate_wheel(float('nan')) is None
     assert translate_wheel(float('inf')) is None
+
+
+def test_steering_feedback_rejects_observed_low_adc_range():
+    gate = SteeringFeedbackGate(
+        center_adc=496, counts_per_deg=18.0, max_steer_deg=22.0,
+        margin_adc=10, valid_samples=3, timeout_sec=0.5)
+    assert (gate.minimum_adc, gate.maximum_adc) == (90, 902)
+    for index, adc in enumerate((7, 24, 72)):
+        assert not gate.update(adc, 0.1*index)
+        assert gate.reason(0.1*index) == 'STEERING_FEEDBACK_INVALID'
+
+
+def test_steering_feedback_requires_stable_fresh_samples():
+    gate = SteeringFeedbackGate(valid_samples=3, timeout_sec=0.5)
+    assert not gate.update(496, 1.0)
+    assert not gate.update(497, 1.1)
+    assert gate.update(495, 1.2)
+    assert gate.valid(1.6)
+    assert not gate.valid(1.71)
+    assert gate.reason(1.71) == 'STEERING_FEEDBACK_TIMEOUT'
+    assert gate.last_valid_age(1.71) == pytest.approx(0.51)
+
+
+def test_drive_watchdog_requires_each_command_stream_to_be_fresh():
+    stamps = {'drive': 10.0, 'wheel': 10.0, 'stop': 10.0}
+    assert command_block_reason(
+        True, 'OK', False, stamps, 10.1, 0.5) == 'NONE'
+    stamps['drive'] = 9.0
+    assert command_block_reason(
+        True, 'OK', False, stamps, 10.1, 0.5) == 'DRIVE_COMMAND_TIMEOUT'
+    # Fresh wheel/stop traffic must not extend a stale drive command.
+    stamps.update(wheel=10.1, stop=10.1)
+    assert command_block_reason(
+        True, 'OK', False, stamps, 10.1, 0.5) == 'DRIVE_COMMAND_TIMEOUT'
+
+
+def test_invalid_feedback_has_priority_in_block_diagnostics():
+    stamps = {'drive': 10.0, 'wheel': 10.0, 'stop': 10.0}
+    assert command_block_reason(
+        False, 'STEERING_FEEDBACK_INVALID', True,
+        stamps, 10.1, 0.5) == 'STEERING_FEEDBACK_INVALID'
+
+
+def test_shutdown_does_not_publish_a_steering_target():
+    fake = SimpleNamespace(
+        pub_wheel=Mock(), pub_drive=Mock(), pub_stop=Mock())
+    McuSimpleCompat.publish_shutdown_stop(fake)
+    fake.pub_wheel.publish.assert_not_called()
+    assert fake.pub_drive.publish.call_count == 3
+    assert fake.pub_stop.publish.call_count == 3
 
 
 def test_real_vehicle_launch_keeps_simple_bridge_and_fake_odom_opt_in():

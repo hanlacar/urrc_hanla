@@ -7,8 +7,10 @@ distance sign from /mcu/applied_drive.  Set encoder_counts_are_signed:=true
 only for a future encoder source whose cumulative delta already carries the
 direction; in that mode the drive sign is deliberately not applied again.
 
-``counts_per_meter`` must be calibrated on the physical vehicle.  The default
-199.8 count/m is only an initial vehicle estimate, not a final calibration.
+``counts_per_meter`` is the measured vehicle calibration: 797.0 count/m.
+Steering is treated as zero-curvature until a separate raw-ADC validator marks
+the feedback valid; the adapter never derives a believable angle from an
+invalid sensor value.
 """
 
 from dataclasses import dataclass
@@ -18,7 +20,7 @@ from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32, Int32
+from std_msgs.msg import Bool, Float32, Int32
 from tf2_ros import TransformBroadcaster
 
 
@@ -47,6 +49,7 @@ class BicycleOdometry:
         counts_per_meter: float,
         max_encoder_delta_counts: int,
         encoder_counts_are_signed: bool = False,
+        steering_feedback_required: bool = False,
     ):
         if not math.isfinite(wheelbase_m) or wheelbase_m <= 0.0:
             raise ValueError("wheelbase_m must be finite and positive")
@@ -59,11 +62,13 @@ class BicycleOdometry:
         self.counts_per_meter = float(counts_per_meter)
         self.max_encoder_delta_counts = int(max_encoder_delta_counts)
         self.encoder_counts_are_signed = bool(encoder_counts_are_signed)
+        self.steering_feedback_required = bool(steering_feedback_required)
 
         self.x = 0.0
         self.y = 0.0
         self.yaw = 0.0
         self.steering_deg = 0.0
+        self.steering_valid = not self.steering_feedback_required
         self.drive_sign = 0
         self._last_encoder = None
         self._last_stamp_sec = None
@@ -71,6 +76,9 @@ class BicycleOdometry:
     def set_steering_deg(self, steering_deg: float) -> None:
         if math.isfinite(float(steering_deg)):
             self.steering_deg = float(steering_deg)
+
+    def set_steering_valid(self, valid: bool) -> None:
+        self.steering_valid = bool(valid)
 
     def set_applied_drive(self, applied_drive: float) -> None:
         value = float(applied_drive)
@@ -134,7 +142,11 @@ class BicycleOdometry:
             signed_counts = self.drive_sign * abs(raw_delta)
 
         ds = signed_counts / self.counts_per_meter
-        steer_rad = math.radians(self.steering_deg)
+        # Invalid feedback must not corrupt yaw.  Propulsion is independently
+        # blocked by mcu_simple_compat while this validity bit is false.
+        effective_steering_deg = (
+            self.steering_deg if self.steering_valid else 0.0)
+        steer_rad = math.radians(effective_steering_deg)
         dtheta = ds * math.tan(steer_rad) / self.wheelbase_m
         theta_mid = self.yaw + 0.5 * dtheta
         self.x += ds * math.cos(theta_mid)
@@ -178,9 +190,9 @@ def make_odometry(stamp, state, result, odom_frame, base_frame):
     odom.twist.twist.angular.z = result.angular_z
     odom.pose.covariance[0] = 0.05
     odom.pose.covariance[7] = 0.05
-    odom.pose.covariance[35] = 0.10
+    odom.pose.covariance[35] = 0.10 if state.steering_valid else 1.0e3
     odom.twist.covariance[0] = 0.05
-    odom.twist.covariance[35] = 0.10
+    odom.twist.covariance[35] = 0.10 if state.steering_valid else 1.0e3
     return odom
 
 
@@ -205,11 +217,12 @@ class McuOdomAdapter(Node):
             "odom_frame": "odom",
             "base_frame": "base_link",
             "wheelbase_m": 0.73,
-            # Initial estimate only: calibrate count/m on the physical vehicle.
-            "counts_per_meter": 199.8,
+            "counts_per_meter": 797.0,
             "publish_tf": True,
             "encoder_topic": "/mcu/encoder",
             "steering_topic": "/mcu/steer_deg",
+            "steering_valid_topic": "/mcu/steering_feedback_valid",
+            "steering_feedback_required": True,
             "drive_topic": "/mcu/applied_drive",
             "max_encoder_delta_counts": 1000,
             # Current ENC_A RISING firmware is unsigned/monotonic.
@@ -226,6 +239,8 @@ class McuOdomAdapter(Node):
                 self.p["max_encoder_delta_counts"]),
             encoder_counts_are_signed=bool(
                 self.p["encoder_counts_are_signed"]),
+            steering_feedback_required=bool(
+                self.p["steering_feedback_required"]),
         )
         self.odom_pub = self.create_publisher(
             Odometry, str(self.p["odom_topic"]), 10)
@@ -236,6 +251,9 @@ class McuOdomAdapter(Node):
         self.create_subscription(
             Float32, str(self.p["steering_topic"]), self._on_steering, 10)
         self.create_subscription(
+            Bool, str(self.p["steering_valid_topic"]),
+            self._on_steering_valid, 10)
+        self.create_subscription(
             Float32, str(self.p["drive_topic"]), self._on_drive, 10)
 
         direction_mode = (
@@ -244,12 +262,22 @@ class McuOdomAdapter(Node):
         self.get_logger().info(
             f"SIMPLE MCU odometry active: {self.p['odom_topic']} and "
             f"{self.p['odom_frame']}->{self.p['base_frame']}; "
-            f"counts_per_meter={self.p['counts_per_meter']} "
-            f"(physical calibration required), direction={direction_mode}, "
+            f"counts_per_meter={self.p['counts_per_meter']}, "
+            f"steering_feedback_required="
+            f"{bool(self.p['steering_feedback_required'])}, "
+            f"direction={direction_mode}, "
             f"publish_tf={bool(self.p['publish_tf'])}")
 
     def _on_steering(self, msg: Float32) -> None:
         self.integrator.set_steering_deg(msg.data)
+
+    def _on_steering_valid(self, msg: Bool) -> None:
+        was_valid = self.integrator.steering_valid
+        self.integrator.set_steering_valid(msg.data)
+        if was_valid and not self.integrator.steering_valid:
+            self.get_logger().error(
+                "STEERING_FEEDBACK_INVALID: odom yaw integration is using "
+                "zero curvature until feedback recovers")
 
     def _on_drive(self, msg: Float32) -> None:
         self.integrator.set_applied_drive(msg.data)

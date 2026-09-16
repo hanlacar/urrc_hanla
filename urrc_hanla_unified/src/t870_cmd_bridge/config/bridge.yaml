@@ -1,8 +1,9 @@
 t870_cmd_bridge:
   ros__parameters:
-    # 입력 토픽은 이 두 개뿐.
-    drive_topic: "/cmd_drive"
-    wheel_topic: "/cmd_wheel"
+    # mcu_simple_compat가 검증/변환한 최종 명령만 받는다.
+    drive_topic: "/mcu/cmd_drive"
+    wheel_topic: "/mcu/cmd_wheel"
+    stop_topic: "/mcu/cmd_stop"
 
     port: "auto"
     preferred_symlink: "/dev/t870_mcu"
@@ -23,7 +24,7 @@ t870_cmd_bridge:
     stage3_pwm: 100
 
     # 조향 확정 기준
-    steer_center_adc: 484
+    steer_center_adc: 496
     steer_counts_per_deg: 18.0
     max_steer_deg: 22
     steer_pwm: 130

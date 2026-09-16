@@ -26,11 +26,18 @@ def generate_launch_description():
             "vehicle_speed_kph_topic", default_value="/vehicle/speed_kph"),
         DeclareLaunchArgument(
             "vehicle_speed_valid_topic", default_value="/vehicle/speed_valid"),
+        DeclareLaunchArgument(
+            "commanded_speed_mps", default_value="0.0",
+            description="Camera controller target speed; zero is the safe default"),
+        DeclareLaunchArgument(
+            "color_fps", default_value="30",
+            description="Stable D456 RGB frame rate"),
         DeclareLaunchArgument("launch_rqt", default_value="true"),
         LogInfo(msg=("Camera perception and path outputs enabled. "
                      "The integrated workspace owns mission decisions and final commands.")),
         include("race_control", "camera_pure_pursuit.launch.py", {
-            "commanded_speed_mps": "0.0",
+            "commanded_speed_mps": LaunchConfiguration("commanded_speed_mps"),
+            "color_fps": LaunchConfiguration("color_fps"),
             "speed_feedback_topic": LaunchConfiguration("vehicle_speed_topic"),
             "launch_rqt": LaunchConfiguration("launch_rqt"),
         }),

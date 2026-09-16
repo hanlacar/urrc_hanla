@@ -19,11 +19,10 @@ gps_route_follower:
     vehicle_mode_topic: /vehicle_mode
     status_topic: /gps_navigation/status
     control_rate_hz: 20.0
-    # Pure Pursuit 계산에 사용하는 차량 축거입니다.
-    # 실제 차량 앞/뒤 차축 중심 사이 거리를 측정한 후 정확한 값으로 수정합니다.
-    wheelbase_m: 0.30
+    # MCU/vehicle contract: measured front/rear axle-centre distance.
+    wheelbase_m: 0.73
     # 실제 앞바퀴 최대 조향각(도)입니다.
-    max_steering_deg: 27.0
+    max_steering_deg: 22.0
     # 조향 부호입니다. 하드웨어 좌/우가 반대면 -1로 변경합니다.
     steering_sign: 1
     # drive level별 전진 lookahead와 후진 전용 lookahead입니다.
