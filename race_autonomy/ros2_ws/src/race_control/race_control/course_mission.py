@@ -237,6 +237,16 @@ class CourseMission:
             self.waypoint_stop_started = None
             self.waypoint_braking = False
             previous_window = ""
+        if (event and event != self.released_event
+                and data.waypoint_stop_section == 2):
+            # URRC_MODE2_WAYPOINT_PASS_THROUGH
+            # Mode 2 ramp waypoint is informational only.
+            # Do not brake, stop or hold because of this waypoint.
+            self.released_event = event
+            self.waypoint_stop_started = None
+            self.waypoint_braking = False
+            self.ramp_second_line_completed = True
+
         if event and event != self.released_event:
             remaining = data.waypoint_remaining_m
             if not math.isfinite(remaining):
@@ -257,10 +267,7 @@ class CourseMission:
                         self.waypoint_stop_started = None
                         return self.stopped("WAYPOINT:STOP_POSITION_ERROR")
                     if data.waypoint_stop_section == 2:
-                        if self.waypoint_stop_started is None:
-                            self.waypoint_stop_started = data.now
-                        if data.now-self.waypoint_stop_started < self.ramp_second_line_stop_sec:
-                            return self.stopped("RAMP:WAYPOINT_STOP_HOLD")
+                        # Mode 2 waypoint stop/hold disabled.
                         self.ramp_second_line_completed = True
                     else:
                         # The perception node counts only frames in this stop's

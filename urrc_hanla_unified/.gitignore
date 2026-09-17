@@ -1,6 +1,26 @@
+
+*~
+*.backup
+*.bak
+*.before_*
 build/
+*.db3
+.DS_Store
+*.engine
 install/
 log/
-__pycache__/
+*.mcap
+# ML / TensorRT
+*.onnx
+*.pt
+*.pth
 *.pyc
+__pycache__/
+*.pyo
 .pytest_cache/
+# Python
+# ROS 2
+# ROS bag
+rosbag2_*/
+# Temporary / backup
+*.trt

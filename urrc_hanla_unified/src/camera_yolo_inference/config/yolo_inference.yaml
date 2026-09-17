@@ -4,9 +4,9 @@ camera_yolo_inference_node:
     class_manifest_path: ""
     device: cuda:0
     input_width: 640
-    input_height: 480
+    input_height: 640
     inference_fps: 40.0
-    detections_image_fps: 30.0
+    detections_image_fps: 2.0
     confidence_threshold: 0.25
     mask_threshold: 0.50
     # The close road surface can have a softer mask edge than distant road.

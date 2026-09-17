@@ -85,7 +85,7 @@ def generate_launch_description():
         DeclareLaunchArgument("class_manifest_path", default_value=default_manifest),
         DeclareLaunchArgument("device", default_value="cuda:0"),
         DeclareLaunchArgument("require_cuda", default_value="true"),
-        DeclareLaunchArgument("python_executable", default_value="python3"),
+        DeclareLaunchArgument("python_executable", default_value="/home/werwerwer/cone_project/venv/bin/python"),
         LogInfo(msg="Hybrid follower starts locked at 0 m/s; D455 RTAB localization must already be running"),
         perception, planner, route, pursuit, speed,
     ])

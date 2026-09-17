@@ -35,19 +35,26 @@ def generate_launch_description():
         Path(yolo_share) / "models" / "hanla_competition_11class_best_rtx5060_fp16.engine",
         Path(yolo_share) / "models" / "hanla_competition_11class_best.pt",
     ]
-    runtime_candidates = [
-        Path(yolo_share).parents[3] / ".yolo_runtime" / "bin" / "python",
-    ]
-    runtime = next((p for p in runtime_candidates if p.is_file()), Path(sys.executable))
-    engine_candidates = [p for p in model_candidates if p.suffix == ".engine" and p.is_file()]
-    pt_candidates = [p for p in model_candidates if p.suffix == ".pt" and p.is_file()]
-    use_engine = bool(engine_candidates) and runtime != Path(sys.executable)
-    if use_engine:
-        model_path = engine_candidates[0]
-    elif pt_candidates:
-        model_path = pt_candidates[0]
-    else:
-        model_path = model_candidates[-1]
+    # URRC local TensorRT runtime
+    runtime = Path(str(Path.home() / "cone_project" / "venv" / "bin" / "python"))
+
+    model_path = (
+        Path(yolo_share)
+        / "models"
+        / "hanla_competition_11class_best_rtx5060_fp16.engine"
+    )
+
+    if not runtime.is_file():
+        raise RuntimeError(
+            f"YOLO Python runtime not found: {runtime}"
+        )
+
+    if not model_path.is_file():
+        raise RuntimeError(
+            f"YOLO TensorRT engine not found: {model_path}"
+        )
+
+    use_engine = True
     yolo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(yolo_share, "launch", "yolo_inference.launch.py")
@@ -56,9 +63,9 @@ def generate_launch_description():
             "python_executable": str(runtime),
             "segmentation_model_path": str(model_path),
             "input_width": "640",
-            "input_height": "480",
+            "input_height": "640",
             "inference_fps": "60.0",
-            "detections_image_fps": "30.0",
+            "detections_image_fps": "5.0",
             "launch_rqt": LaunchConfiguration("launch_rqt"),
             "navigation_bottom_exclusion_ratio": "0.0",
             "expected_image_width": "640",
