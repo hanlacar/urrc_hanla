@@ -762,15 +762,14 @@ class DrRealSegmentedFollower(Node):
                 self._enter_wait("INTERSECTION", key)
                 return True
 
-            # The mode-2 ramp waypoint stops only when the live IMU confirms
-            # an absolute slope of at least the configured threshold.
+            # TEST COPY:
+            # Mode-2 ramp waypoint is diagnostic only.
+            # Do not enter TIMED_STOP because of slope + waypoint.
             if mode == 2:
-                if self._slope_stop_required():
-                    self._enter_wait("TIMED_STOP", key)
-                    return True
                 self.handled_events.add(key)
                 self._status(
-                    f"SLOPE_STOP_SKIPPED pitch={self.pitch_deg:+.2f}deg "
+                    f"TEST_RAMP_WAYPOINT_PASS "
+                    f"pitch={self.pitch_deg:+.2f}deg "
                     f"threshold={self.slope_stop_threshold:.2f}deg")
                 return False
 

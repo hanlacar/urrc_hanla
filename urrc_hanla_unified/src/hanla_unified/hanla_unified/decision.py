@@ -71,10 +71,12 @@ def decide(data: DecisionInput, camera_confidence_min: float = 0.8) -> Decision:
     # Traffic-light stopping is owned by the DR follower at an exact STOP_LINE
     # waypoint. Gating here would stop as soon as the section number changes,
     # potentially metres before the stop line.
+    # TEST COPY:
+    # slope + ramp waypoint is diagnostic only.
+    # Continue to normal section source selection.
     if (data.section == 2 and abs(data.pitch_deg) >= 5.0
             and data.ramp_stop_waypoint):
-        return Decision(0.0, 0.0, "slope_hold", True, True,
-                        "ramp_waypoint_hold")
+        pass
 
     candidates = {"camera": data.camera, "dr": data.dr, "lidar": data.lidar}
     for source in SECTION_PRIORITIES[data.section]:

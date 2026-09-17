@@ -37,7 +37,15 @@ class UltralyticsSegmentationBackend:
         if result.masks is None:
             shape=image.shape[:2]
             return instances,{role:np.zeros(shape,np.uint8) for role in role_class_ids}
+        # TensorRT/Ultralytics may return uint8 masks on some runtime paths.
+        # torch bilinear interpolation requires a floating-point tensor.
+        # TensorRT/Ultralytics may return uint8 masks on some runtime paths.
+        # torch bilinear interpolation requires a floating-point tensor.
         mask_tensor=result.masks.data
+        if not torch.is_floating_point(mask_tensor):
+            mask_tensor=mask_tensor.float()
+        if not torch.is_floating_point(mask_tensor):
+            mask_tensor=mask_tensor.float()
         # TensorRT inference and the expensive mask resize / merge / threshold
         # must remain on CUDA in real-vehicle mode. Never silently fall back
         # to CPU when require_cuda was requested.

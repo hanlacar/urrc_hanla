@@ -80,8 +80,14 @@ class CameraYoloInferenceNode(Node):
         self.last_detections_image_time=-float("inf")
         # 5 ms divides the 25 ms / 40 Hz inference period exactly and avoids
         # waking Python 1000 times per second while waiting for a new frame.
-        poll_period=min(.005,self.inference_period/4.0)
-        self.create_timer(poll_period,self.process_latest,callback_group=self.inference_callbacks)
+        # Poll at about twice the target inference rate.
+        # This avoids hundreds of unnecessary Python timer callbacks/sec.
+        poll_period=max(.005,self.inference_period/2.0)
+        self.create_timer(
+            poll_period,
+            self.process_latest,
+            callback_group=self.inference_callbacks
+        )
         self.create_timer(1.,self.publish_health,callback_group=self.input_callbacks)
         visualization_fps=float(self.p("detections_image_fps"))
         if visualization_fps>0.0:
@@ -90,7 +96,11 @@ class CameraYoloInferenceNode(Node):
             # inference owns the Python thread at its deadline. Poll cheaply
             # and apply the 30 Hz limit ourselves so the next available slot
             # is used instead of waiting another complete display period.
-            self.create_timer(min(.005,self.visualization_period/4.0),self.publish_latest_visualization,callback_group=self.visualization_callbacks)
+            self.create_timer(
+                self.visualization_period,
+                self.publish_latest_visualization,
+                callback_group=self.visualization_callbacks
+            )
     def p(self,name):return self.get_parameter(name).value
     def on_image(self,image):
         self.input_frame_times.append(time.monotonic());self.frames.push(image)
@@ -186,6 +196,11 @@ class CameraYoloInferenceNode(Node):
             detections.append({"class_id":class_id,"class_name":str(name),"confidence":round(float(item.get("confidence",0.)),4),"xyxy":[round(float(v),1) for v in item.get("xyxy",[])]})
         self.detections_pub.publish(String(data=json.dumps({"stamp":{"sec":image.header.stamp.sec,"nanosec":image.header.stamp.nanosec},"frame_id":image.header.frame_id,"detections":detections})))
     def publish_latest_visualization(self):
+        # Debug visualization is expensive.
+        # Do not render anything unless somebody is actually viewing it.
+        if self.detections_image_pub.get_subscription_count() <= 0:
+            return
+
         now=time.monotonic()
         if now-self.last_detections_image_time<self.visualization_period:return
         item=self.latest_visualization
@@ -246,15 +261,11 @@ class CameraYoloInferenceNode(Node):
             # it live even when this frame contains no usable navigation mask;
             # perception_valid and the zero masks below still force a safe stop.
             self.output_frame_times.append(time.monotonic())
+
+            # Store only the latest inference result.
+            # Rendering/publishing is handled by the low-rate visualization
+            # timer and only when an RQT subscriber exists.
             self.latest_visualization=(bgr,instances,masks,image.header)
-            # Emit the diagnostic frame immediately after successful
-            # inference; the periodic timer can repeat it for slow viewers.
-            self.cached_visualization_msg = bgr8_to_image(
-                self.render_detections(bgr, instances, masks), image.header)
-            self.detections_image_pub.publish(self.cached_visualization_msg)
-            self.last_visualized_stamp = (image.header.stamp.sec,
-                                          image.header.stamp.nanosec)
-            self.last_detections_image_time = time.monotonic()
             for role in ("road","white_line","yellow_line"):
                 if not validate_output_mask(masks[role],(image.height,image.width),allow_empty=True):raise ValueError(f"invalid_{role}_mask")
             if not has_navigation_mask(masks):raise ValueError("empty_navigation_masks: road/white_line/yellow_line all absent")

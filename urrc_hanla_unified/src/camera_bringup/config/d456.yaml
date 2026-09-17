@@ -27,7 +27,7 @@
     unite_imu_method: 0
     pointcloud.enable: false
     align_depth.enable: true
-    enable_sync: true
+    enable_sync: false
     enable_rgbd: false
     publish_tf: false
     # The vehicle USB hub can enumerate before the D456 appears. Keep waiting

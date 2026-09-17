@@ -1,7 +1,7 @@
 real_parking_slot_selector:
   ros__parameters:
-    front_scan_topic: /scan_front
-    rear_scan_topic: /scan_rear
+    front_scan_topic: /front/scan
+    rear_scan_topic: /rear/scan
     mode_topic: /drive_mode
 
     t_selected_topic: /t_parking/selected_slot

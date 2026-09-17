@@ -61,7 +61,7 @@ camera_path_planner_node:
     validator_minimum_path_span_m: 1.0
     validator_rejected_confidence_cap: 0.35
     # RQT BEV/ROI/path overlay; kept below control frequency to limit CPU use.
-    debug_image_fps: 10.0
+    debug_image_fps: 2.0
 camera_path_controller_node:
   ros__parameters:
     # Measured body width. Path clearance uses this configured footprint width.
